@@ -1,0 +1,65 @@
+from __future__ import annotations
+
+from typing import Any
+
+from backend.integrations.stake.graphql_client import (
+    StakeGraphQLClient,
+)
+
+from backend.integrations.stake.queries import (
+    FIXTURE_DETAILS_QUERY,
+)
+
+
+class StakeMainMarketService:
+    def __init__(
+        self,
+        client: StakeGraphQLClient,
+    ) -> None:
+        self.client = client
+
+    async def get_fixture_main_markets(
+        self,
+        fixture_slug: str,
+    ) -> dict[str, Any]:
+        response = await self.client.execute(
+
+
+
+            query=FIXTURE_DETAILS_QUERY,
+            variables={
+                "fixture": fixture_slug,
+                "groups": [
+                    "main",
+                ],
+            },
+        )
+
+        import json
+
+        print(
+            json.dumps(
+                response,
+                indent=2,
+            )
+        )
+
+        fixture = (
+            response
+            .get("data", {})
+            .get("slugFixture")
+        )
+
+        if not fixture:
+            return {}
+
+        import json
+
+        print(
+            json.dumps(
+                fixture,
+                indent=2,
+            )
+        )
+
+        return fixture

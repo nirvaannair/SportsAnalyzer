@@ -1,0 +1,502 @@
+Looking at the actual state of the project, I would **not** start building ML yet.
+
+You have enough historical bet data to begin ML experimentation, but you do **not** yet have the data infrastructure needed to build a model that can actually beat the market.
+
+Right now your biggest risk is training a model on incomplete information and then having to throw it away later.
+
+# Current Reality
+
+You have successfully built:
+
+✅ Stake fixture ingestion
+
+✅ Stake market ingestion
+
+✅ Stake outcome ingestion
+
+✅ Odds snapshot storage
+
+✅ Bet history ingestion
+
+✅ Bet leg extraction
+
+✅ Historical betting database
+
+✅ Core sports database structure
+
+✅ Foundation for ML training
+
+That is a huge amount of work already completed.
+
+---
+
+# What I Would Do Next
+
+## Phase 1: Finish Data Integrity
+
+Before ML.
+
+### Priority 1
+
+Link every bet leg to fixture_id
+
+Right now this is the most important task.
+
+You cannot properly engineer features until every leg is tied to:
+
+* Sport
+* Tournament
+* Fixture
+* Market
+* Outcome
+
+Structure should become:
+
+```
+Bet Leg
+
+↓
+
+Fixture
+
+↓
+
+Tournament
+
+↓
+
+Sport
+
+↓
+
+Market
+
+↓
+
+Outcome
+```
+
+Without this, feature generation becomes messy.
+
+---
+
+### Priority 2
+
+Build outcome resolution verification
+
+You currently trust Stake statuses.
+
+Create a validation layer.
+
+Example:
+
+```
+Arsenal vs Chelsea
+
+Winner
+
+Arsenal
+```
+
+Verify:
+
+* fixture exists
+* outcome exists
+* market exists
+* settlement matches
+
+This prevents corrupted training data later.
+
+---
+
+### Priority 3
+
+Build data quality dashboards
+
+Before ML.
+
+You need visibility.
+
+Examples:
+
+```
+Fixtures synced
+Markets synced
+Outcomes synced
+Odds snapshots synced
+Bet legs synced
+Unlinked legs
+Missing fixtures
+Missing markets
+```
+
+This catches ingestion issues immediately.
+
+---
+
+# Phase 2: Build Historical Feature Database
+
+This is where I would spend most of my time.
+
+Not ML.
+
+Data.
+
+---
+
+## Create Team Statistics Tables
+
+New tables:
+
+```
+team_season_stats
+
+team_match_stats
+
+team_form_snapshots
+
+team_ratings
+```
+
+Store:
+
+* wins
+* losses
+* draws
+* goals scored
+* goals conceded
+* xG
+* xGA
+* home form
+* away form
+
+per match.
+
+---
+
+## Create Historical Snapshot Logic
+
+This is critical.
+
+Never use future information.
+
+Example:
+
+Bad:
+
+```
+Arsenal vs Chelsea
+Jan 10
+
+Use season stats from March
+```
+
+Data leakage.
+
+Model becomes fake.
+
+---
+
+Correct:
+
+```
+Arsenal vs Chelsea
+Jan 10
+
+Only use data available before Jan 10
+```
+
+Every feature must be generated historically.
+
+This is one of the biggest reasons sports models fail.
+
+---
+
+# Phase 3: External Data Integrations
+
+This should happen before ML.
+
+Current order I would use:
+
+### 1. FBref
+
+Most important.
+
+Provides:
+
+* team stats
+* player stats
+* league stats
+
+---
+
+### 2. Understat
+
+Provides:
+
+* xG
+* xGA
+
+Very valuable.
+
+---
+
+### 3. Odds API
+
+Extremely important.
+
+Reason:
+
+Stake odds alone are dangerous.
+
+You want:
+
+```
+Stake
+Pinnacle
+Bet365
+DraftKings
+FanDuel
+etc
+```
+
+Then your model can learn market disagreement.
+
+Huge edge potential.
+
+---
+
+### 4. FootyStats
+
+Useful.
+
+Not essential initially.
+
+---
+
+### 5. WhoScored
+
+Useful.
+
+Not essential initially.
+
+---
+
+# Phase 4: Create Feature Generation System
+
+This is the next major milestone.
+
+Create something like:
+
+```
+backend/
+├── ml/
+│   ├── feature_generation/
+│   │   ├── winner_features.py
+│   │   ├── totals_features.py
+│   │   ├── handicap_features.py
+│   │   └── common_features.py
+```
+
+Notice something important:
+
+Separate models by market.
+
+---
+
+I would NEVER train:
+
+```
+Winner
+Totals
+Handicap
+BTTS
+```
+
+inside the same model.
+
+---
+
+Instead:
+
+```
+Winner Model
+
+Totals Model
+
+Handicap Model
+
+BTTS Model
+```
+
+Each market behaves differently.
+
+Each requires different features.
+
+---
+
+# Phase 5: Build Dataset Generator
+
+Create:
+
+```
+training_example
+```
+
+for every settled leg.
+
+Example:
+
+```
+Fixture:
+Arsenal vs Chelsea
+
+Market:
+Winner
+
+Selection:
+Arsenal
+
+Odds:
+1.82
+
+Features:
+...
+
+Target:
+1
+```
+
+Stored in a dedicated ML dataset table.
+
+Something like:
+
+```
+training_samples
+```
+
+or
+
+```
+model_training_rows
+```
+
+---
+
+# Phase 6: Build Evaluation System
+
+This is where most betting projects fail.
+
+Do NOT evaluate using accuracy.
+
+Example:
+
+```
+1.10 favorite
+
+Wins
+```
+
+Accuracy says model is good.
+
+Profit says nothing.
+
+---
+
+Track:
+
+* ROI
+* Yield
+* CLV
+* Log Loss
+* Brier Score
+* Calibration
+
+These matter.
+
+---
+
+# Phase 7: First Model
+
+Only now.
+
+Start with:
+
+### Logistic Regression
+
+Reason:
+
+* simple
+* interpretable
+* fast
+* easy baseline
+
+If Logistic Regression cannot beat the market, XGBoost won't magically fix it.
+
+---
+
+Then:
+
+* XGBoost
+* LightGBM
+* CatBoost
+
+---
+
+# Very Important Change I Would Make
+
+You currently have:
+
+```
+bet_history
+bet_legs
+```
+
+I would add:
+
+```
+feature_snapshots
+```
+
+Table.
+
+Example:
+
+```
+feature_snapshots
+
+id
+
+fixture_id
+
+snapshot_time
+
+feature_json
+```
+
+This lets you preserve exactly what the model saw at prediction time.
+
+Without this, retraining and debugging later becomes extremely difficult.
+
+---
+
+# What I Would Personally Work On This Week
+
+In order:
+
+1. Finish linking bet legs to fixtures
+2. Build data integrity validation
+3. Build sync monitoring dashboard
+4. Integrate FBref
+5. Integrate Understat
+6. Create historical team statistics tables
+7. Create feature generation framework
+8. Create training dataset generator
+9. Build baseline Logistic Regression model
+10. Build model evaluation system
+
+I would **not** spend any time on automatic betting, bankroll management, Kelly staking, compounding strategies, or advanced frontend dashboards yet.
+
+The bottleneck right now is not execution.
+
+The bottleneck is building a high-quality historical dataset that can support a profitable model. Once that foundation is correct, everything else becomes much easier.
