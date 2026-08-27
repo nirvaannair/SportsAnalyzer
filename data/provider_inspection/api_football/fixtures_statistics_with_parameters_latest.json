@@ -1,0 +1,216 @@
+{
+  "request": {
+    "endpoint": "fixtures/statistics",
+    "parameters": {
+      "fixture": "1213185"
+    }
+  },
+  "response_metadata": {
+    "http_status": 200,
+    "quota_headers": {
+      "x-ratelimit-limit": "10",
+      "x-ratelimit-remaining": "9",
+      "x-ratelimit-requests-limit": "100",
+      "x-ratelimit-requests-remaining": "97"
+    },
+    "headers": {
+      "Date": "Wed, 26 Aug 2026 10:01:31 GMT",
+      "Content-Type": "application/json",
+      "Transfer-Encoding": "chunked",
+      "Connection": "keep-alive",
+      "Access-Control-Allow-Credentials": "True",
+      "Access-Control-Allow-Headers": "x-rapidapi-key, x-apisports-key, x-rapidapi-host",
+      "Access-Control-Allow-Methods": "GET, OPTIONS",
+      "Access-Control-Allow-Origin": "*",
+      "Cache-Control": "no-store, no-cache, must-revalidate",
+      "Content-Encoding": "gzip",
+      "Expires": "0",
+      "Pragma": "no-cache",
+      "Server": "cloudflare",
+      "Vary": "Accept-Encoding",
+      "x-ratelimit-limit": "10",
+      "x-ratelimit-remaining": "9",
+      "x-ratelimit-requests-limit": "100",
+      "x-ratelimit-requests-remaining": "97",
+      "x-sub-ttl": "43200",
+      "cf-cache-status": "DYNAMIC",
+      "CF-RAY": "a311fee09e3a178a-MAA"
+    }
+  },
+  "response": {
+    "get": "fixtures/statistics",
+    "parameters": {
+      "fixture": "1213185"
+    },
+    "errors": [],
+    "results": 2,
+    "paging": {
+      "current": 1,
+      "total": 1
+    },
+    "response": [
+      {
+        "team": {
+          "id": 779,
+          "name": "FC Rostov",
+          "logo": "https://media.api-sports.io/football/teams/779.png"
+        },
+        "statistics": [
+          {
+            "type": "Shots on Goal",
+            "value": 4
+          },
+          {
+            "type": "Shots off Goal",
+            "value": 2
+          },
+          {
+            "type": "Total Shots",
+            "value": 10
+          },
+          {
+            "type": "Blocked Shots",
+            "value": 4
+          },
+          {
+            "type": "Shots insidebox",
+            "value": 8
+          },
+          {
+            "type": "Shots outsidebox",
+            "value": 2
+          },
+          {
+            "type": "Fouls",
+            "value": 18
+          },
+          {
+            "type": "Corner Kicks",
+            "value": 2
+          },
+          {
+            "type": "Offsides",
+            "value": 2
+          },
+          {
+            "type": "Ball Possession",
+            "value": "44%"
+          },
+          {
+            "type": "Yellow Cards",
+            "value": 5
+          },
+          {
+            "type": "Red Cards",
+            "value": null
+          },
+          {
+            "type": "Goalkeeper Saves",
+            "value": 6
+          },
+          {
+            "type": "Total passes",
+            "value": 376
+          },
+          {
+            "type": "Passes accurate",
+            "value": 292
+          },
+          {
+            "type": "Passes %",
+            "value": "78%"
+          },
+          {
+            "type": "expected_goals",
+            "value": null
+          },
+          {
+            "type": "goals_prevented",
+            "value": null
+          }
+        ]
+      },
+      {
+        "team": {
+          "id": 596,
+          "name": "Zenit",
+          "logo": "https://media.api-sports.io/football/teams/596.png"
+        },
+        "statistics": [
+          {
+            "type": "Shots on Goal",
+            "value": 7
+          },
+          {
+            "type": "Shots off Goal",
+            "value": 6
+          },
+          {
+            "type": "Total Shots",
+            "value": 14
+          },
+          {
+            "type": "Blocked Shots",
+            "value": 1
+          },
+          {
+            "type": "Shots insidebox",
+            "value": 13
+          },
+          {
+            "type": "Shots outsidebox",
+            "value": 1
+          },
+          {
+            "type": "Fouls",
+            "value": 6
+          },
+          {
+            "type": "Corner Kicks",
+            "value": 9
+          },
+          {
+            "type": "Offsides",
+            "value": 6
+          },
+          {
+            "type": "Ball Possession",
+            "value": "56%"
+          },
+          {
+            "type": "Yellow Cards",
+            "value": 1
+          },
+          {
+            "type": "Red Cards",
+            "value": null
+          },
+          {
+            "type": "Goalkeeper Saves",
+            "value": 3
+          },
+          {
+            "type": "Total passes",
+            "value": 470
+          },
+          {
+            "type": "Passes accurate",
+            "value": 375
+          },
+          {
+            "type": "Passes %",
+            "value": "80%"
+          },
+          {
+            "type": "expected_goals",
+            "value": null
+          },
+          {
+            "type": "goals_prevented",
+            "value": null
+          }
+        ]
+      }
+    ]
+  }
+}
