@@ -1,0 +1,93 @@
+{
+  "provider": "api_football",
+  "request": {
+    "endpoint": "status",
+    "parameters": {},
+    "request_id": "99dc41e8-8da3-4788-ae78-c6744a39c263"
+  },
+  "result": {
+    "status": "success",
+    "succeeded": true,
+    "http_status": 200,
+    "error_message": null,
+    "received_at": "2026-08-27T05:49:28.445248+00:00",
+    "response_headers": {
+      "date": "Thu, 27 Aug 2026 05:50:13 GMT",
+      "content-type": "application/json",
+      "transfer-encoding": "chunked",
+      "connection": "keep-alive",
+      "access-control-allow-credentials": "True",
+      "access-control-allow-headers": "x-rapidapi-key, x-apisports-key, x-rapidapi-host",
+      "access-control-allow-methods": "GET, OPTIONS",
+      "access-control-allow-origin": "*",
+      "cache-control": "no-store, no-cache, must-revalidate",
+      "content-encoding": "gzip",
+      "expires": "0",
+      "pragma": "no-cache",
+      "server": "cloudflare",
+      "vary": "Accept-Encoding",
+      "x-ratelimit-limit": "10",
+      "x-ratelimit-remaining": "9",
+      "x-ratelimit-requests-limit": "100",
+      "x-ratelimit-requests-remaining": "100",
+      "cf-cache-status": "DYNAMIC",
+      "cf-ray": "a318cc240b34ac6d-MAA"
+    },
+    "payload": {
+      "get": "status",
+      "parameters": [],
+      "errors": [],
+      "results": 0,
+      "paging": {
+        "current": 1,
+        "total": 1
+      },
+      "response": {
+        "account": {
+          "firstname": "Nirvaan",
+          "lastname": "Nair",
+          "email": "nirvaannair@gmail.com"
+        },
+        "subscription": {
+          "plan": "Free",
+          "end": "2027-05-09T00:00:00+00:00",
+          "active": true
+        },
+        "requests": {
+          "current": 0,
+          "limit_day": 100
+        }
+      }
+    }
+  },
+  "quota": {
+    "observed_at": "2026-08-27T05:49:28.445248+00:00",
+    "requests_remaining": 100,
+    "requests_limit": 100,
+    "rate_limit_remaining": 9,
+    "rate_limit_limit": 10,
+    "retry_after_seconds": null,
+    "metadata": {
+      "date": "Thu, 27 Aug 2026 05:50:13 GMT",
+      "content-type": "application/json",
+      "transfer-encoding": "chunked",
+      "connection": "keep-alive",
+      "access-control-allow-credentials": "True",
+      "access-control-allow-headers": "x-rapidapi-key, x-apisports-key, x-rapidapi-host",
+      "access-control-allow-methods": "GET, OPTIONS",
+      "access-control-allow-origin": "*",
+      "cache-control": "no-store, no-cache, must-revalidate",
+      "content-encoding": "gzip",
+      "expires": "0",
+      "pragma": "no-cache",
+      "server": "cloudflare",
+      "vary": "Accept-Encoding",
+      "x-ratelimit-limit": "10",
+      "x-ratelimit-remaining": "9",
+      "x-ratelimit-requests-limit": "100",
+      "x-ratelimit-requests-remaining": "100",
+      "cf-cache-status": "DYNAMIC",
+      "cf-ray": "a318cc240b34ac6d-MAA"
+    }
+  }
+}
