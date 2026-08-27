@@ -18,6 +18,7 @@ from .base import (
     ProviderResponse,
 )
 from .config import ProviderConfig
+from .rate_limiter import ProviderRateLimiter
 
 
 class ApiFootballAdapter(ProviderAdapter):
@@ -36,6 +37,9 @@ class ApiFootballAdapter(ProviderAdapter):
     - make betting decisions
 
     All provider-specific identifiers remain provider-scoped.
+
+    Request execution is protected by a provider-specific rate limiter so
+    configured provider limits are respected locally before requests are sent.
     """
 
     _PROVIDER_NAME = "api_football"
@@ -106,6 +110,22 @@ class ApiFootballAdapter(ProviderAdapter):
 
         self._request_lock = asyncio.Lock()
 
+        self._rate_limiter = ProviderRateLimiter(
+            provider_name=self.name,
+            requests_per_second=(
+                config.rate_limit.requests_per_second
+            ),
+            requests_per_minute=(
+                config.rate_limit.requests_per_minute
+            ),
+            requests_per_hour=(
+                config.rate_limit.requests_per_hour
+            ),
+            requests_per_day=(
+                config.rate_limit.requests_per_day
+            ),
+        )
+
     @property
     def name(self) -> str:
         """Return the stable internal provider name."""
@@ -117,7 +137,7 @@ class ApiFootballAdapter(ProviderAdapter):
         Return capabilities exposed by API-Football.
 
         These are application capabilities, not hard-coded real-world data.
-        Availability for a particular competition/season must still be
+        Availability for a particular competition or season must still be
         determined from the provider's actual response.
         """
         return frozenset(
@@ -172,9 +192,8 @@ class ApiFootballAdapter(ProviderAdapter):
         """
         Check API-Football availability.
 
-        This performs an actual provider request. It therefore consumes one
-        API request and should be called deliberately rather than on every
-        scheduler cycle.
+        This performs an actual provider request and therefore consumes one
+        API request.
         """
         checked_at = datetime.now(timezone.utc)
 
@@ -204,11 +223,9 @@ class ApiFootballAdapter(ProviderAdapter):
 
     async def get_quota_snapshot(self) -> ProviderQuotaSnapshot:
         """
-        Return the latest quota/rate-limit information observed from the
-        provider.
+        Return the latest provider quota and rate-limit information.
 
-        If no API response has been made yet, unknown values remain None.
-        This method itself does not consume an API request.
+        This method does not consume an API request.
         """
         if self._latest_quota is not None:
             return self._latest_quota
@@ -225,14 +242,18 @@ class ApiFootballAdapter(ProviderAdapter):
         """
         Execute one GET request against API-Football.
 
-        The endpoint and parameters come from the caller. No real-world
-        endpoint parameters are embedded into this adapter.
+        The endpoint and parameters come from the caller.
+
+        No real-world endpoint parameters are embedded into this adapter.
 
         The complete decoded JSON response is returned unchanged.
 
-        Retry behavior is limited to transient HTTP/network failures.
-        Provider responses containing API-level errors are returned to the
-        caller instead of being fabricated into successful responses.
+        Requests pass through the local provider rate limiter before being
+        sent.
+
+        Retry behavior is limited to transient HTTP and network failures.
+        Provider-level API errors are returned rather than being fabricated
+        into successful responses.
         """
         if context.provider_name != self.name:
             raise ValueError(
@@ -265,11 +286,15 @@ class ApiFootballAdapter(ProviderAdapter):
 
         last_exception: Exception | None = None
 
-        for attempt in range(1, self._config.retry.max_attempts + 1):
+        for attempt in range(
+            1,
+            self._config.retry.max_attempts + 1,
+        ):
             try:
                 return await self._execute_request(
                     request_context
                 )
+
             except aiohttp.ClientResponseError as exc:
                 last_exception = exc
 
@@ -283,7 +308,9 @@ class ApiFootballAdapter(ProviderAdapter):
                             exc.status
                         ),
                         payload=None,
-                        received_at=datetime.now(timezone.utc),
+                        received_at=datetime.now(
+                            timezone.utc
+                        ),
                         http_status=exc.status,
                         error_message=str(exc),
                     )
@@ -300,7 +327,9 @@ class ApiFootballAdapter(ProviderAdapter):
                         context=request_context,
                         status=ProviderRequestStatus.NETWORK_ERROR,
                         payload=None,
-                        received_at=datetime.now(timezone.utc),
+                        received_at=datetime.now(
+                            timezone.utc
+                        ),
                         error_message=str(exc),
                     )
 
@@ -316,7 +345,10 @@ class ApiFootballAdapter(ProviderAdapter):
             error_message=(
                 str(last_exception)
                 if last_exception is not None
-                else "Provider request failed without an exception."
+                else (
+                    "Provider request failed without "
+                    "an exception."
+                )
             ),
         )
 
@@ -326,6 +358,11 @@ class ApiFootballAdapter(ProviderAdapter):
     ) -> ProviderResponse:
         """
         Execute one HTTP request attempt.
+
+        The local rate limiter is acquired immediately before the request.
+
+        The request lock prevents concurrent HTTP execution inside this
+        adapter, while the rate limiter enforces configured provider limits.
 
         This method performs no canonical transformation.
         """
@@ -337,6 +374,8 @@ class ApiFootballAdapter(ProviderAdapter):
         url = f"{self._base_url}/{context.endpoint}"
 
         async with self._request_lock:
+            await self._rate_limiter.acquire()
+
             async with self._session.get(
                 url,
                 params=dict(context.parameters),
@@ -345,6 +384,10 @@ class ApiFootballAdapter(ProviderAdapter):
                     key.lower(): value
                     for key, value in response.headers.items()
                 }
+
+                await self._rate_limiter.record_response(
+                    response_headers=response_headers
+                )
 
                 await self._update_quota_snapshot(
                     response_headers
@@ -356,7 +399,10 @@ class ApiFootballAdapter(ProviderAdapter):
                     payload = await response.json(
                         content_type=None
                     )
-                except (aiohttp.ContentTypeError, ValueError) as exc:
+                except (
+                    aiohttp.ContentTypeError,
+                    ValueError,
+                ) as exc:
                     body = await response.text()
 
                     status = (
@@ -371,7 +417,9 @@ class ApiFootballAdapter(ProviderAdapter):
                         context=context,
                         status=status,
                         payload=body,
-                        received_at=datetime.now(timezone.utc),
+                        received_at=datetime.now(
+                            timezone.utc
+                        ),
                         http_status=http_status,
                         response_headers=response_headers,
                         error_message=str(exc),
@@ -385,6 +433,8 @@ class ApiFootballAdapter(ProviderAdapter):
                     )
 
                     if retry_after is not None:
+                        previous = self._latest_quota
+
                         self._latest_quota = (
                             ProviderQuotaSnapshot(
                                 provider_name=self.name,
@@ -392,24 +442,26 @@ class ApiFootballAdapter(ProviderAdapter):
                                     timezone.utc
                                 ),
                                 requests_remaining=(
-                                    self._latest_quota.requests_remaining
-                                    if self._latest_quota
+                                    previous.requests_remaining
+                                    if previous is not None
                                     else None
                                 ),
                                 requests_limit=(
-                                    self._latest_quota.requests_limit
-                                    if self._latest_quota
+                                    previous.requests_limit
+                                    if previous is not None
                                     else None
                                 ),
-                                retry_after_seconds=retry_after,
+                                retry_after_seconds=(
+                                    retry_after
+                                ),
                                 rate_limit_remaining=(
-                                    self._latest_quota.rate_limit_remaining
-                                    if self._latest_quota
+                                    previous.rate_limit_remaining
+                                    if previous is not None
                                     else None
                                 ),
                                 rate_limit_limit=(
-                                    self._latest_quota.rate_limit_limit
-                                    if self._latest_quota
+                                    previous.rate_limit_limit
+                                    if previous is not None
                                     else None
                                 ),
                                 metadata=response_headers,
@@ -428,20 +480,26 @@ class ApiFootballAdapter(ProviderAdapter):
                         headers=response.headers,
                     )
 
-                status = self._status_from_success_or_provider_error(
-                    http_status=http_status,
-                    payload=payload,
+                status = (
+                    self._status_from_success_or_provider_error(
+                        http_status=http_status,
+                        payload=payload,
+                    )
                 )
 
-                error_message = self._extract_provider_error(
-                    payload
+                error_message = (
+                    self._extract_provider_error(
+                        payload
+                    )
                 )
 
                 return ProviderResponse(
                     context=context,
                     status=status,
                     payload=payload,
-                    received_at=datetime.now(timezone.utc),
+                    received_at=datetime.now(
+                        timezone.utc
+                    ),
                     http_status=http_status,
                     response_headers=response_headers,
                     error_message=error_message,
@@ -591,7 +649,7 @@ class ApiFootballAdapter(ProviderAdapter):
         if 400 <= status_code < 500:
             return ProviderRequestStatus.VALIDATION_ERROR
 
-        if 500 <= status_code:
+        if status_code >= 500:
             return ProviderRequestStatus.SERVER_ERROR
 
         return ProviderRequestStatus.UNKNOWN_ERROR
@@ -687,6 +745,11 @@ class ApiFootballAdapter(ProviderAdapter):
             return None
 
         try:
-            return float(value)
+            parsed = float(value)
         except (TypeError, ValueError):
             return None
+
+        if parsed < 0:
+            return None
+
+        return parsed
