@@ -16,7 +16,10 @@ class DatabaseSettings(BaseSettings):
     """Database connection settings."""
 
     model_config = SettingsConfigDict(
+        env_file=ENV_FILE,
+        env_file_encoding="utf-8",
         env_prefix="SPORTSANALYZER_DB_",
+        case_sensitive=False,
         extra="ignore",
     )
 
@@ -59,7 +62,10 @@ class ProviderSettings(BaseSettings):
     """
 
     model_config = SettingsConfigDict(
+        env_file=ENV_FILE,
+        env_file_encoding="utf-8",
         env_prefix="SPORTSANALYZER_PROVIDER_",
+        case_sensitive=False,
         extra="ignore",
     )
 
@@ -97,7 +103,10 @@ class SchedulerSettings(BaseSettings):
     """Settings for the centralized ingestion scheduler."""
 
     model_config = SettingsConfigDict(
+        env_file=ENV_FILE,
+        env_file_encoding="utf-8",
         env_prefix="SPORTSANALYZER_SCHEDULER_",
+        case_sensitive=False,
         extra="ignore",
     )
 
@@ -129,25 +138,36 @@ class IdentityResolutionSettings(BaseSettings):
     """Settings for the provider entity identity-resolution system."""
 
     model_config = SettingsConfigDict(
+        env_file=ENV_FILE,
+        env_file_encoding="utf-8",
         env_prefix="SPORTSANALYZER_IDENTITY_",
+        case_sensitive=False,
         extra="ignore",
     )
 
     automatic_resolution_enabled: bool = Field(
         default=True,
-        description="Whether high-confidence identity mappings may be accepted automatically.",
+        description=(
+            "Whether high-confidence identity mappings may be "
+            "accepted automatically."
+        ),
     )
 
     minimum_resolution_confidence: float = Field(
         default=0.95,
         ge=0.0,
         le=1.0,
-        description="Minimum confidence required for automatic resolution.",
+        description=(
+            "Minimum confidence required for automatic resolution."
+        ),
     )
 
     unresolved_retention_enabled: bool = Field(
         default=True,
-        description="Whether unresolved provider entities remain available for later resolution.",
+        description=(
+            "Whether unresolved provider entities remain available "
+            "for later resolution."
+        ),
     )
 
 
@@ -179,7 +199,9 @@ class ApplicationSettings(BaseSettings):
 
     timezone: str = Field(
         default="UTC",
-        description="Timezone used for application scheduling and timestamps.",
+        description=(
+            "Timezone used for application scheduling and timestamps."
+        ),
     )
 
     api_host: str = Field(
@@ -195,19 +217,31 @@ class ApplicationSettings(BaseSettings):
     )
 
     database: DatabaseSettings = Field(
-        default_factory=DatabaseSettings,
+        default_factory=lambda: DatabaseSettings(
+            _env_file=ENV_FILE,
+            _env_file_encoding="utf-8",
+        ),
     )
 
     provider: ProviderSettings = Field(
-        default_factory=ProviderSettings,
+        default_factory=lambda: ProviderSettings(
+            _env_file=ENV_FILE,
+            _env_file_encoding="utf-8",
+        ),
     )
 
     scheduler: SchedulerSettings = Field(
-        default_factory=SchedulerSettings,
+        default_factory=lambda: SchedulerSettings(
+            _env_file=ENV_FILE,
+            _env_file_encoding="utf-8",
+        ),
     )
 
     identity: IdentityResolutionSettings = Field(
-        default_factory=IdentityResolutionSettings,
+        default_factory=lambda: IdentityResolutionSettings(
+            _env_file=ENV_FILE,
+            _env_file_encoding="utf-8",
+        ),
     )
 
     @property
@@ -228,15 +262,21 @@ class ApplicationSettings(BaseSettings):
         method should validate configuration structure without performing I/O.
         """
         if not self.environment_name:
-            raise ValueError("Application environment must not be empty.")
+            raise ValueError(
+                "Application environment must not be empty."
+            )
 
         if not self.log_level.strip():
-            raise ValueError("Log level must not be empty.")
+            raise ValueError(
+                "Log level must not be empty."
+            )
 
         if not self.timezone.strip():
-            raise ValueError("Timezone must not be empty.")
+            raise ValueError(
+                "Timezone must not be empty."
+            )
 
-        if self.database.url == "":
+        if not self.database.url.strip():
             raise ValueError(
                 "Database URL is not configured. "
                 "Set SPORTSANALYZER_DB_URL in the environment."
@@ -270,4 +310,5 @@ def settings_as_dict(
     for logging or diagnostics.
     """
     active_settings = settings or get_settings()
+
     return active_settings.model_dump(mode="python")
