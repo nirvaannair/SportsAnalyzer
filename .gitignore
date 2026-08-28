@@ -1,4 +1,4 @@
-# Environment variables and secrets
+# Environment / secrets
 .env
 .env.*
 !.env.example
@@ -13,27 +13,27 @@ __pycache__/
 venv/
 env/
 
-# Testing and coverage
-.pytest_cache/
-.coverage
-htmlcov/
-.coverage.*
+# IDE / editor
+.vscode/
+.idea/
 
-# Type checking / linting
+# Test / tooling caches
+.pytest_cache/
 .mypy_cache/
 .ruff_cache/
 
-# Build artifacts
-build/
-dist/
-*.egg-info/
+# Local provider inspection data
+data/provider_inspection/
 
-# IDE / editor files
-.vscode/
-.idea/
+# Logs
+*.log
 
 # OS files
 .DS_Store
 Thumbs.db
 
-StakeAPI/
+# Local database / generated artifacts
+*.db
+*.sqlite
+*.sqlite3
+
