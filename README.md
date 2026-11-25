@@ -1,0 +1,355 @@
+# SportsAnalyzer
+
+A personal, locally run football analytics and betting system. It pulls in data from several free sports-data APIs and from scraped injury news, reconciles all of it into one consistent model of teams, players and matches, runs statistical and machine-learning models to estimate match probabilities, compares those to bookmaker odds to find value, and places and tracks bets on Stake. Staking strategies such as fractional Kelly and automatic compounding are configurable. A clean, minimal dashboard shows the whole thing.
+
+> **Status:** this README describes the target system and what the existing code already covers. It is the agreed brief before the main build starts.
+
+---
+
+## Running it locally (Windows, PowerShell)
+
+One-time setup:
+
+```powershell
+copy .env.example .env          # then fill in keys and a POSTGRES_PASSWORD
+python -m venv .venv
+.\.venv\Scripts\python -m pip install -e ".[dev]"
+npm --prefix frontend install
+```
+
+Every time (one terminal each for the API and the dashboard):
+
+```powershell
+docker compose up -d --wait db                                    # Postgres 17 on localhost:5433
+.\.venv\Scripts\alembic.exe upgrade head                          # apply database migrations
+.\.venv\Scripts\uvicorn.exe backend.api.main:app --reload --port 8000   # API on :8000
+npm --prefix frontend run dev                                     # dashboard on http://localhost:5173
+```
+
+Checks:
+
+```powershell
+.\.venv\Scripts\python -m pytest -q      # tests (DB tests skip if Postgres is down)
+.\.venv\Scripts\ruff.exe check .         # lint
+npm --prefix frontend run build          # type-check + build the dashboard
+```
+
+| Path | What lives there |
+|---|---|
+| `backend/api/` | FastAPI app the dashboard calls (`/api/health`, `/api/providers`) |
+| `backend/integrations/` | Provider adapters, rate limiter, raw payload storage |
+| `backend/identity/` | Canonical entities and provider-ID mapping |
+| `backend/database/`, `alembic/` | SQLAlchemy models and migrations |
+| `frontend/` | React + Vite + Tailwind dashboard |
+| `tests/` | pytest suite |
+
+---
+
+## 1. What you asked for, restated
+
+| # | Requirement | How I read it |
+|---|---|---|
+| 1 | Sports analyzer, football first | The core is football-specific, but provider, identity and betting layers stay sport-agnostic so other sports can be added later. |
+| 2 | Data from many API providers, **free plans only** | API-Football, TheSportsDB, football-data.org, and similar. Slow ingestion is fine: the system can spend days backfilling within daily quotas. |
+| 3 | Providers use different structures and IDs | Every provider's raw response is stored as-is, then mapped onto one **canonical** set of teams, players, competitions and matches through an identity-resolution layer. |
+| 4 | Scrape news for injuries to star and key players | Scheduled scrapers read news and injury pages, extract (player, status, expected return), link the player to the canonical player, and turn it into model features. |
+| 5 | "Crazy" ML analysis with whatever maths is best | A layered model stack: team-strength ratings, a goals model, gradient-boosted models on rich features, calibration, and an ensemble. Details in §5. |
+| 6 | Bets created and placed on Stake via "the StakeAPI" | An execution layer that turns model output into bet slips and submits them to Stake. **There are big caveats here; see §7.** |
+| 7 | Monitor every bet | A full bet ledger: every proposed, placed, settled, void or failed bet, with the model's reasoning, the odds taken, the closing odds and the P&L. |
+| 8 | Strategic betting, e.g. auto-compounding | A strategy engine: compounding, fractional Kelly, flat stakes and ladders, with bankroll rules and kill switches. |
+| 9 | Nice dashboard, polished, clean, minimal | A local web app (FastAPI backend + React frontend) with a restrained, minimal design. |
+| 10 | Runs locally | Everything runs on your machine: Postgres, the backend API, a background worker/scheduler and the frontend. Nothing is hosted. |
+
+---
+
+## 2. What is already in the repo
+
+The existing code is a solid **data-ingestion and identity foundation**. It is well structured and worth keeping.
+
+| Area | Files | What it does |
+|---|---|---|
+| Config | `backend/core/config.py` | Pydantic settings loaded from `.env` (`SPORTSANALYZER_DB_*`, `_PROVIDER_*`, `_SCHEDULER_*`, `_IDENTITY_*`). Identity auto-resolution threshold defaults to 0.95. |
+| Database | `backend/database/engine.py`, `models.py`, `alembic/` | Async SQLAlchemy engine and an Alembic migration that creates `raw_provider_observations`: every provider response, with request params, headers, payload hash, status and timestamps. |
+| Provider abstraction | `backend/integrations/base.py`, `registry.py`, `config.py` | An abstract `ProviderAdapter` with capabilities (`TEAMS`, `MATCHES`, `PLAYER_INJURIES`, `ODDS`, `BET_PLACEMENT`, …), a registry to enable or disable providers, and per-provider rate-limit, quota, retry, cache and sync config. |
+| Rate limiting | `backend/integrations/rate_limiter.py` | A sliding-window limiter (per second/minute/hour/day) that also reads quota headers from responses. This is what makes free-plan backfilling over several days work. |
+| Raw storage | `backend/integrations/raw.py`, `repository.py`, `postgres_raw_repository.py` | Immutable raw payloads with content hashing and `store_if_new` deduplication, so unchanged responses are not stored twice. |
+| API-Football | `backend/integrations/api_football.py`, `api_football_config.py` | A working adapter with health check, quota snapshot, backoff and error classification. |
+| Identity | `backend/identity/*.py` | Canonical entities (team, player, competition, season), provider-to-canonical mappings with status (active/rejected/superseded/unresolved), resolution methods (exact ID, cross-reference, fuzzy name, composite score, manual override), evidence and conflicts, plus a name normalizer. |
+| Scripts | `scripts/*.py` | Inspecting API-Football, testing the adapter and testing the database connection. |
+
+**Gaps and issues found:**
+
+- `StakeAPI` is committed as a **gitlink (submodule) with no `.gitmodules`**, so it is empty in every clone or worktree. It must become a proper submodule, be vendored, or be replaced (see §7).
+- There is a `Providers README.md` in the main checkout, but it is untracked and empty.
+- The identity *models* exist, but there are no DB tables for canonical entities or mappings yet, and no resolver that actually runs.
+- There is no normalized (parsed) layer between raw payloads and canonical entities yet: no fixtures, results, lineups, odds or injuries tables.
+- There are no tests (the `scripts/test_*` files are manual scripts, not pytest).
+- There is no `pyproject.toml` or `requirements.txt` in this repo.
+
+---
+
+## 3. Target architecture
+
+```
+┌──────────────────────────────────────────────────────────────────────────┐
+│                         Local machine (Windows)                          │
+│                                                                          │
+│  ┌──────────────┐   ┌──────────────┐   ┌──────────────┐                  │
+│  │ API adapters │   │ News scrapers│   │ Odds sources │  ← scheduler     │
+│  │ (free tiers) │   │ (injuries)   │   │ (Stake + API)│    (worker)      │
+│  └──────┬───────┘   └──────┬───────┘   └──────┬───────┘                  │
+│         ▼                  ▼                  ▼                          │
+│  ┌────────────────────────────────────────────────────┐                  │
+│  │ 1. RAW layer      raw_provider_observations (done) │                  │
+│  ├────────────────────────────────────────────────────┤                  │
+│  │ 2. PARSED layer   provider_* tables (per provider) │                  │
+│  ├────────────────────────────────────────────────────┤                  │
+│  │ 3. IDENTITY       canonical_* + provider mappings  │ ← review queue   │
+│  ├────────────────────────────────────────────────────┤                  │
+│  │ 4. CANONICAL      matches, teams, players, events, │                  │
+│  │                   lineups, injuries, odds history  │                  │
+│  └───────────────────────┬────────────────────────────┘                  │
+│                          ▼                                               │
+│  ┌────────────────────────────────────────────────────┐                  │
+│  │ 5. FEATURES   point-in-time feature store          │                  │
+│  │ 6. MODELS     ratings → goals model → GBM → ensemble│                 │
+│  │ 7. PRICING    probabilities → fair odds → value     │                 │
+│  └───────────────────────┬────────────────────────────┘                  │
+│                          ▼                                               │
+│  ┌────────────────────────────────────────────────────┐                  │
+│  │ 8. STRATEGY   staking + compounding + risk limits  │                  │
+│  │ 9. EXECUTION  paper broker │ Stake broker          │                  │
+│  │ 10. LEDGER    bets, settlements, bankroll history  │                  │
+│  └───────────────────────┬────────────────────────────┘                  │
+│                          ▼                                               │
+│     FastAPI (REST + WebSocket) ───────► React dashboard (localhost)      │
+│     PostgreSQL                                                           │
+└──────────────────────────────────────────────────────────────────────────┘
+```
+
+### Proposed stack
+
+| Concern | Choice | Why |
+|---|---|---|
+| Language | Python 3.12 | Already in use; best ML ecosystem. |
+| DB | PostgreSQL (already set up) + Alembic | JSONB for raw payloads, solid for time series of odds. |
+| Backend API | FastAPI | Async, matches the existing async SQLAlchemy code. |
+| Scheduler / worker | APScheduler in a separate worker process, jobs persisted in Postgres | No Redis needed; runs ingestion, scraping, model runs and bet settlement. |
+| HTTP | `httpx` (async) | Already a natural fit for the adapters. |
+| Scraping | `httpx` + `selectolax`/BeautifulSoup; Playwright only where JS rendering is needed | Lightweight first, a headless browser only as a fallback. |
+| ML | `numpy`, `scipy`, `pandas`/`polars`, `scikit-learn`, `LightGBM`, `statsmodels`, optionally `PyMC` | See §5. |
+| Experiment tracking | MLflow (local file store) | Compare model versions and keep artifacts. |
+| Frontend | React + Vite + TypeScript, Tailwind, shadcn/ui, Recharts/visx, TanStack Query | Clean, minimal, fast to build and polish. |
+| Packaging | `pyproject.toml` + a standard `.venv`; Postgres in Docker Compose | Easy local setup on Windows. |
+
+---
+
+## 4. Data ingestion
+
+### 4.1 Free data sources (planned)
+
+Free-tier limits change often. Each adapter reads the real limits from response headers or config instead of hard-coding them.
+
+| Source | Type | Used for | Notes |
+|---|---|---|---|
+| **API-Football** (api-sports.io) | API, free key | Fixtures, results, lineups, events, player stats, injuries, some odds | Adapter already built. The free plan has a small daily request cap and restricted seasons, so backfill is slow but steady. |
+| **football-data.org** | API, free key | Fixtures, results, standings, squads for top competitions | Per-minute limit and a limited competition list on the free tier. |
+| **TheSportsDB** | API, free/test key | Team and player metadata, badges, venues, some events | Good for metadata and images; thinner on stats. |
+| **football-data.co.uk** | Free CSV downloads | **Decades of results with bookmaker closing odds** | The most valuable source for ML: it gives the historical market prices needed for backtesting. No key needed. |
+| **OpenLigaDB** | Free API | German leagues | No key needed. |
+| **The Odds API** | API, free credits | Current odds from many bookmakers | Small monthly credit allowance, so use it sparingly. |
+| **Understat / similar xG sites** | Scrape | Shot-level xG for the top leagues | Only within each site's terms and robots.txt, cached heavily. |
+| **Stake** | Unofficial GraphQL | The odds you actually bet at; your balance and bet history | See §7. |
+
+### 4.2 Ingestion principles
+
+1. **Raw first, always.** Every response goes into `raw_provider_observations` (already built). Parsing can be re-run at any time without spending quota again.
+2. **A quota-aware planner.** A job queue ranks work by value (upcoming fixtures > recent results > deep history) and spends each provider's daily budget across it. Backfilling full history over days or weeks is expected and fine.
+3. **Incremental sync.** Separate cadences for upcoming fixtures, live and just-finished matches, odds snapshots, news and deep history (the `*_INTERVAL_SECONDS` settings already exist).
+4. **Point-in-time correctness.** Every record keeps `received_at`, so models only ever train on what was knowable *before* kickoff. Without this, backtests are worthless.
+
+### 4.3 Identity resolution (different IDs per provider)
+
+This is the part that makes multi-provider work possible. The domain model is already in `backend/identity/`; what's left is persistence and a resolver.
+
+- **Tables:** `canonical_teams`, `canonical_players`, `canonical_competitions`, `canonical_seasons`, `canonical_matches`, `provider_entity_mappings` (provider, entity type, provider ID → canonical ID, status, method, confidence, evidence) and `identity_conflicts`.
+- **Resolution cascade** (the order follows the existing `ResolutionMethod` enum):
+  1. Exact external identifiers, and cross-references a provider exposes (for example a provider that also lists another provider's ID).
+  2. Deterministic rules (same competition + season + normalized name).
+  3. Name and context: a team matches on normalized name + country + competition; a player on name + date of birth + nationality + current team; a match on date ± 1 day + both resolved teams.
+  4. Fuzzy and composite scoring (token-set similarity, Jaro-Winkler, transliteration-aware normalization, alias lists such as "Man Utd" / "Manchester United FC").
+  5. Anything below the confidence threshold (0.95 by default) goes to a **review queue in the dashboard**, where you approve, reject or merge with one click. That becomes a `MANUAL_OVERRIDE`, and the system learns the alias.
+- **Matches anchor everything.** Once two providers' fixtures resolve to the same canonical match, their team and player IDs from that match become strong evidence for each other.
+
+### 4.4 Injury and news scraping
+
+- **Sources:** injury tables and team-news pages from major outlets, club official sites, league injury reports, and Reddit's API for fast-moving team news. Every scraper respects robots.txt and site terms, identifies itself honestly, caches aggressively and runs at low frequency.
+- **Pipeline:**
+  1. Fetch → store raw HTML/JSON in the raw layer (same table, `payload_format = html`).
+  2. Extract article text and publish time.
+  3. **Entity linking:** find player and team names and resolve them through the identity layer.
+  4. **Status classification:** `out`, `doubtful`, `returning`, `suspended`, `fit`, plus an expected-return date and injury type. Start with rules and keyword patterns, then upgrade to a small fine-tuned classifier (or, optionally, an LLM call per article for higher accuracy).
+  5. Combine with structured injury data from API-Football and de-duplicate across sources, weighting each source by its reliability.
+- **"Star or key player" is computed, not hand-labelled.** Player importance comes from minutes share, xG/xA contribution, rating, and the team's results with versus without the player. A missing striker who scores 40% of the team's goals moves the model far more than a missing backup full-back.
+
+---
+
+## 5. The ML and maths stack
+
+"Crazy" here means *rigorous and layered*, not just big. Football outcomes are low-scoring and noisy, and bookmaker prices are already sharp. The models that work well combine solid statistical structure with careful feature engineering, and they are judged against the market.
+
+### 5.1 Layer 1: team-strength ratings
+- **Elo / pi-ratings** with home advantage and margin of victory, updated match by match.
+- **Dynamic attack and defence strengths**: a time-decayed Dixon-Coles style model, refitted regularly.
+- **xG-based ratings** where xG data exists (more stable than goals).
+
+### 5.2 Layer 2: goals model (the core probabilistic engine)
+- **Dixon-Coles (bivariate Poisson with low-score correction)** with exponential time decay. It produces a full score-line probability matrix, from which all markets follow: 1X2, over/under, BTTS, Asian handicap, correct score.
+- Optionally a **Bayesian hierarchical model** (PyMC) for proper uncertainty, which helps a lot for promoted teams and small leagues.
+
+### 5.3 Layer 3: gradient-boosted models on rich features
+LightGBM classifiers and regressors on point-in-time features:
+- Ratings and Dixon-Coles outputs from layers 1 and 2.
+- Form: rolling xG for and against, shots, goals and points over different windows.
+- **Availability:** importance-weighted sum of missing players (injuries and suspensions), expected-lineup strength, and lineup changes versus the usual XI.
+- Schedule: rest days, fixture congestion, travel distance, European midweek games.
+- Context: league position, motivation (title race, relegation, nothing to play for), derby flag, manager change recency.
+- **Market features:** opening odds, odds movement, implied probabilities. The market is the strongest single predictor, so the models learn *where it is wrong* rather than ignoring it.
+
+### 5.4 Layer 4: calibration and ensemble
+- Stack the layers with a meta-model (logistic regression or a small GBM).
+- **Calibrate** with isotonic regression or Platt scaling. Value betting needs *calibrated probabilities*, not just accuracy.
+- **Shrink towards the market:** blend the model probability with the de-margined market probability, with the blend weight learned out of sample. This avoids betting on the model's overconfident outliers.
+
+### 5.5 Pricing and value detection
+- Remove the bookmaker margin (power or Shin method) to get the market's fair probabilities.
+- **Edge = p_model × decimal_odds − 1.** Only bet when the edge is above a threshold *and* the model's uncertainty is small enough.
+
+### 5.6 Validation (the part that decides whether any of this is real)
+- **Walk-forward backtesting** by season and matchweek, with no future information leaking in (point-in-time features).
+- Metrics: log loss, Brier score, ranked probability score, calibration curves, **ROI and yield on simulated bets, and closing line value (CLV)**. CLV, meaning whether we beat the closing price, is the most reliable early signal of a real edge.
+- A model only gets **promoted to live betting** after it beats the market's closing line over a meaningful sample in paper trading.
+
+> Honest expectation: beating major-league 1X2 markets is very hard. Edges, if they exist, tend to sit in **smaller leagues, team news the market has not priced yet (injuries), and derivative markets** (totals, BTTS). The system is built to find out where you have an edge, and to show you clearly when you don't.
+
+---
+
+## 6. Strategy engine and compounding
+
+Strategies are configurable objects in the dashboard. Each one owns a bankroll and has its own rules.
+
+| Strategy | Behaviour |
+|---|---|
+| **Flat** | A fixed stake or fixed % of bankroll per bet. |
+| **Fractional Kelly** | Stake = f × Kelly(p, odds), with f usually 0.1–0.33. Kelly on overconfident probabilities ruins bankrolls, so it is always fractional and capped. |
+| **Auto-compounding (bankroll %)** | Each new stake is a % of the *current* strategy bankroll, so wins grow future stakes automatically and losses shrink them. |
+| **Compounding ladder (rollover)** | The return of bet *n* becomes the stake of bet *n+1*, for up to *k* steps, then the profit is banked and the ladder restarts. This is your "winnings of one bet go to the next" mechanism. |
+| **Accumulator builder** | Combine independent value selections (no correlated legs from the same match unless modelled). |
+
+**Risk controls on every strategy (required, not optional):**
+- Max stake per bet, per day and per match; minimum edge; minimum and maximum odds.
+- A **max-drawdown kill switch**: the strategy pauses itself after an X% drop from its peak.
+- A daily loss limit and a cooldown after a losing streak.
+- **Profit lock:** bank a % of profits out of the compounding pot.
+- A global kill switch in the dashboard header that stops all execution immediately.
+- **Execution modes per strategy:** `paper` (simulated, the default) → `approve` (each bet waits for one click from you) → `auto` (fully automatic).
+
+The ladder's risk grows exponentially: a 5-step ladder at odds of 2.0 needs five wins in a row, and its stakes double every step. The dashboard shows the probability of completing the ladder and the expected value before you enable it.
+
+---
+
+## 7. Stake integration: important findings
+
+I read the `StakeAPI` package in your main checkout (`chipadevteam/StakeAPI`). Here is what it actually does:
+
+1. **It is unofficial.** Stake does not publish a public betting API. The package works by replaying the browser's own GraphQL calls (`/_api/graphql`) with an `x-access-token` copied from DevTools.
+2. **Only the balance query is real.** `get_user_balance()` sends a real GraphQL query (`UserBalances`). Everything else, including `place_bet()`, `get_sports_events()` and `get_bet_history()`, calls REST paths like `/api/v1/bets/place` that look invented and that Stake almost certainly doesn't serve. **As it stands, the package cannot place a sports bet.**
+3. **Placing sports bets would mean reverse-engineering Stake's own sportsbook GraphQL operations** (fetching fixtures and markets, then the bet mutation) from the browser's network traffic, and keeping up when Stake changes them. It is doable but fragile. It also sits behind Cloudflare, so requests need the right headers and sometimes break.
+4. **Account risk.** Automated betting with a scraped session token very likely breaks Stake's terms of service. Stake can restrict or close accounts and hold balances, and it limits accounts that win consistently. Stake.com is also not legally available in many countries. **You need to confirm that you can legally use Stake where you live and that you accept this account risk.**
+
+### 7.1 What the StakeAPI docs add (checked 2026-11-25)
+
+I read the documentation you pointed to (the hosted site at chipadevteam.github.io/StakeAPI and the full `docs/` folder in the repo):
+
+- **Placing a bet:** the betting guide only shows `client.place_bet({"game_id": ..., "amount": ..., "currency": "btc", "bet_type": "single"})`. That calls the same invented REST path (`/api/v1/bets/place`) and uses a casino-style payload. **There is no sportsbook bet mutation anywhere in the docs or the code.**
+- **Sports data:** a `SportsEvents` GraphQL query (`sportsEvents(first, sportSlug) → markets → outcomes { name odds }`) exists in `endpoints.py`. Its shape looks guessed rather than captured from real traffic; it needs to be checked against a live response.
+- **Bet history:** a `BetHistory` query on `user.bets` exists. It selects `game { name slug }`, which suggests casino bets, so sportsbook bets may need different fields.
+- **Rate limits:** the docs only cover the client's own throttling (`rate_limit=…`) and a `RateLimitError`. Stake's real limits are not documented.
+- The docs actively promote betting bots. They say nothing about Stake's terms of service, so the account risk above still applies.
+
+**Conclusion:** the docs don't change the plan. The working pieces are the token-based GraphQL transport and the balance query. Fixtures, odds and bet placement have to come from **real requests captured from your browser.**
+
+**What you will do once (before Phase 6):** on stake.com, open DevTools → Network, filter for `graphql`, then:
+1. open a football match page (captures the fixture/markets/odds query),
+2. add a selection to the bet slip and place one minimum-stake INR bet (captures the bet mutation and its variables: outcome IDs, amount, currency, odds-change setting),
+3. open My Bets → sports (captures the sports bet history query).
+
+Then save each request body (**not** the headers or token) into `backend/execution/stake/operations/*.graphql`. I'll build `StakeBroker` on those exact operations and verify them read-only first.
+
+**How I plan to build it so the rest of the system doesn't depend on it:**
+- An abstract `Broker` interface with `get_balance`, `get_markets`, `quote`, `place_bet`, `get_open_bets` and `get_settled_bets`.
+- `PaperBroker`: a full simulation using real odds snapshots. It is the default and is used for all validation.
+- `StakeBroker`: my own small GraphQL client (I won't build on the package's invented REST endpoints), with read-only operations first (balance, markets/odds, bet history), and bet placement added only after it is verified manually against your account, in small stakes, in `approve` mode.
+- **Idempotency:** each bet has a client-side key, so a retry can never place it twice. The ledger is reconciled against Stake's bet history.
+- **Odds-change guard:** re-quote right before placing and reject the bet if the price dropped below the edge threshold.
+- **Token handling:** the token is stored only in the local `.env` (git-ignored), never logged, and the dashboard shows when it has expired and needs replacing.
+
+---
+
+## 8. Dashboard
+
+Minimal and calm: a neutral palette, one accent colour, generous whitespace, a dense data table only where it earns its place, light and dark modes.
+
+| Page | Contents |
+|---|---|
+| **Overview** | Bankroll curve, today's P&L, open exposure, ROI/yield/CLV tiles, active strategies, global kill switch. |
+| **Fixtures** | Upcoming matches in the 10 phase-1 leagues with model probabilities vs market, fair odds, edge, injury flags, and drill-down into the score matrix and feature contributions. |
+| **Value bets** | The current opportunities ranked by edge × confidence, with approve/reject for `approve`-mode strategies. |
+| **Bet ledger** | Every bet: status, stake, odds taken vs closing odds, P&L, strategy, model version and a "why" panel. Filterable and exportable. |
+| **Strategies** | Create and edit strategies (type, bankroll, limits, mode), with a compounding simulator (Monte Carlo of bankroll paths) before enabling. |
+| **Models** | Backtest results, calibration plots, log loss and CLV over time, model version comparison, promote/demote. |
+| **Team news** | The injury and suspension feed with source, confidence and estimated impact on the next match. |
+| **Data sources** | Provider health, quota used/remaining today, backfill progress, last sync, errors. |
+| **Identity review** | Unresolved and conflicting provider-to-canonical mappings, with approve/merge/reject. |
+| **Settings** | API keys (masked), Stake token status, schedules, thresholds. |
+
+Live updates (new odds, bet placed, bet settled) arrive over a WebSocket.
+
+---
+
+## 9. Build roadmap
+
+| Phase | Deliverable |
+|---|---|
+| **0. Foundations** | `pyproject.toml` + `.venv`, pytest suite, remove the broken `StakeAPI` gitlink (our own `StakeBroker` replaces it), `.env.example`, `docker-compose.yml` for Postgres, lint/test scripts. |
+| **1. Data** | Parsed and canonical tables; identity resolver + review queue; adapters for football-data.org, TheSportsDB and the football-data.co.uk CSV importer; quota-aware backfill planner. |
+| **2. News** | Injury scrapers, entity linking, status classification, player-importance metric. |
+| **3. Models** | Feature store; Elo + Dixon-Coles; LightGBM; calibration; walk-forward backtester with historical odds; MLflow. |
+| **4. Strategy + paper trading** | Strategy engine, risk controls, `PaperBroker`, ledger, settlement job. |
+| **5. Dashboard** | FastAPI endpoints + React UI for every page in §8. |
+| **6. Stake** | Read-only `StakeBroker` → `approve`-mode placement → `auto` mode only after the model shows positive CLV in paper trading. |
+
+---
+
+## 10. Decisions (agreed 2026-11-25)
+
+| Topic | Decision |
+|---|---|
+| Bookmaker | **Stake**, using your **INR wallet**. All amounts, limits and P&L are stored and shown in INR. |
+| Leagues (phase 1) | **Top 5 + second tiers:** Premier League, Championship, La Liga, Segunda División, Serie A, Serie B, Bundesliga, 2. Bundesliga, Ligue 1, Ligue 2. |
+| Markets | **1X2, Over/Under goals, BTTS.** All three are derived from the Dixon-Coles score matrix, plus the GBM layer. Asian handicap is out of scope for now. |
+| Automation | **Paper → approve → auto.** Each strategy starts in paper mode. Approve mode unlocks once the Stake broker is verified. Auto mode unlocks only after positive closing line value over a minimum sample of paper bets. |
+| Default risk limits | **Conservative:** max 2% of strategy bankroll per bet, 0.25× Kelly, auto-pause at 20% drawdown from peak. Each strategy can override these in the dashboard. Hard caps stay in config. |
+| Frontend | **React + Vite + TypeScript + Tailwind**, shadcn/ui, Recharts, TanStack Query. |
+| Database | **PostgreSQL via Docker Compose** (`docker compose up -d db`), migrated with Alembic. |
+
+### Still needed from you
+
+1. **API keys in `.env`** (never in chat): API-Football (you have it), football-data.org (free sign-up), and The Odds API (optional). TheSportsDB's free test key is used unless you have your own.
+2. **Captured Stake sportsbook requests** before Phase 6 (see §7.1). Not needed until then.
+
+---
+
+## 11. Disclaimer
+
+This is a personal research tool. Sports betting carries a real risk of loss, and no model guarantees profit. Use only money you can afford to lose, follow the laws where you live, and set the bankroll limits above before enabling any automatic execution.

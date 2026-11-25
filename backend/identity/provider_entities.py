@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from enum import StrEnum
-from typing import Any, Mapping
+from typing import Any
 
 
 class IdentityEntityType(StrEnum):
@@ -203,7 +204,7 @@ class ProviderEntityObservation:
         entity: ProviderEntity,
         *,
         observed_at: datetime | None = None,
-    ) -> "ProviderEntityObservation":
+    ) -> ProviderEntityObservation:
         """
         Create a historical observation from a provider entity.
         """

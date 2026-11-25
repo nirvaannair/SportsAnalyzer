@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from typing import Mapping
+from collections.abc import Mapping
 
 from .config import (
     ProviderCacheConfig,
@@ -11,7 +11,6 @@ from .config import (
     ProviderRetryConfig,
     ProviderSyncConfig,
 )
-
 
 PROVIDER_NAME = "api_football"
 

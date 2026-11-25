@@ -9,7 +9,6 @@ from typing import Any
 
 from dotenv import load_dotenv
 
-
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 if str(PROJECT_ROOT) not in sys.path:
@@ -25,7 +24,6 @@ from backend.integrations.config import (
     ProviderRetryConfig,
     ProviderSyncConfig,
 )
-
 
 ENV_FILE = PROJECT_ROOT / ".env"
 

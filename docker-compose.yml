@@ -1,0 +1,28 @@
+# Local infrastructure for SportsAnalyzer.
+# Start:  docker compose up -d db
+# Stop:   docker compose stop db
+# Values come from .env (see .env.example).
+name: sportsanalyzer
+
+services:
+  db:
+    image: postgres:17-alpine
+    container_name: sportsanalyzer-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-sportsanalyzer}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-sportsanalyzer}
+    ports:
+      # 5433 on your machine so it never clashes with a locally installed Postgres on 5432.
+      - "127.0.0.1:${POSTGRES_PORT:-5433}:5432"
+    volumes:
+      - sportsanalyzer-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  sportsanalyzer-pgdata:

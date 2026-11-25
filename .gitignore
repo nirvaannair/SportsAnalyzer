@@ -37,3 +37,15 @@ Thumbs.db
 *.sqlite
 *.sqlite3
 
+
+# Reference clone of the unofficial StakeAPI package (not used by the app)
+StakeAPI/
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+
+# Local caches
+.claude/worktrees/
+.claude/settings.local.json
+*.egg-info/

@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
-from typing import Any, Mapping
+from collections.abc import Mapping
+from datetime import UTC, datetime
+from typing import Any
 from uuid import uuid4
 
 import aiohttp
@@ -195,7 +196,7 @@ class ApiFootballAdapter(ProviderAdapter):
         This performs an actual provider request and therefore consumes one
         API request.
         """
-        checked_at = datetime.now(timezone.utc)
+        checked_at = datetime.now(UTC)
 
         context = self._build_context(
             endpoint=self._STATUS_ENDPOINT,
@@ -232,7 +233,7 @@ class ApiFootballAdapter(ProviderAdapter):
 
         return ProviderQuotaSnapshot(
             provider_name=self.name,
-            observed_at=datetime.now(timezone.utc),
+            observed_at=datetime.now(UTC),
         )
 
     async def fetch(
@@ -309,17 +310,13 @@ class ApiFootballAdapter(ProviderAdapter):
                         ),
                         payload=None,
                         received_at=datetime.now(
-                            timezone.utc
+                            UTC
                         ),
                         http_status=exc.status,
                         error_message=str(exc),
                     )
 
-            except (
-                aiohttp.ClientConnectionError,
-                aiohttp.ClientConnectorError,
-                asyncio.TimeoutError,
-            ) as exc:
+            except (TimeoutError, aiohttp.ClientConnectionError, aiohttp.ClientConnectorError) as exc:
                 last_exception = exc
 
                 if attempt >= self._config.retry.max_attempts:
@@ -328,7 +325,7 @@ class ApiFootballAdapter(ProviderAdapter):
                         status=ProviderRequestStatus.NETWORK_ERROR,
                         payload=None,
                         received_at=datetime.now(
-                            timezone.utc
+                            UTC
                         ),
                         error_message=str(exc),
                     )
@@ -341,7 +338,7 @@ class ApiFootballAdapter(ProviderAdapter):
             context=request_context,
             status=ProviderRequestStatus.UNKNOWN_ERROR,
             payload=None,
-            received_at=datetime.now(timezone.utc),
+            received_at=datetime.now(UTC),
             error_message=(
                 str(last_exception)
                 if last_exception is not None
@@ -418,7 +415,7 @@ class ApiFootballAdapter(ProviderAdapter):
                         status=status,
                         payload=body,
                         received_at=datetime.now(
-                            timezone.utc
+                            UTC
                         ),
                         http_status=http_status,
                         response_headers=response_headers,
@@ -439,7 +436,7 @@ class ApiFootballAdapter(ProviderAdapter):
                             ProviderQuotaSnapshot(
                                 provider_name=self.name,
                                 observed_at=datetime.now(
-                                    timezone.utc
+                                    UTC
                                 ),
                                 requests_remaining=(
                                     previous.requests_remaining
@@ -498,7 +495,7 @@ class ApiFootballAdapter(ProviderAdapter):
                     status=status,
                     payload=payload,
                     received_at=datetime.now(
-                        timezone.utc
+                        UTC
                     ),
                     http_status=http_status,
                     response_headers=response_headers,
@@ -514,7 +511,7 @@ class ApiFootballAdapter(ProviderAdapter):
 
         Missing headers remain unknown. The adapter never invents values.
         """
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
 
         requests_remaining = self._parse_int(
             headers.get(
@@ -605,7 +602,7 @@ class ApiFootballAdapter(ProviderAdapter):
         return ProviderRequestContext(
             provider_name=self.name,
             endpoint=endpoint,
-            requested_at=datetime.now(timezone.utc),
+            requested_at=datetime.now(UTC),
             request_id=str(uuid4()),
             entity_type=entity_type,
             provider_entity_id=provider_entity_id,

@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from enum import StrEnum
-from typing import Any, Mapping
+from typing import Any
 
 from backend.integrations.base import (
     ProviderEntityType,
@@ -73,7 +74,7 @@ class RawPayload:
     def from_provider_response(
         cls,
         response: ProviderResponse,
-    ) -> "RawPayload":
+    ) -> RawPayload:
         """
         Construct a raw payload from a provider response.
 
@@ -119,14 +120,14 @@ class RawPayload:
         received_at: datetime | None = None,
         provider_timestamp: datetime | None = None,
         response_headers: Mapping[str, str] | None = None,
-    ) -> "RawPayload":
+    ) -> RawPayload:
         """
         Construct a raw payload directly from a provider request context.
 
         This is useful for adapters that need to preserve a response before
         constructing a higher-level ProviderResponse object.
         """
-        actual_received_at = received_at or datetime.now(timezone.utc)
+        actual_received_at = received_at or datetime.now(UTC)
 
         payload_format = cls._detect_payload_format(payload)
 

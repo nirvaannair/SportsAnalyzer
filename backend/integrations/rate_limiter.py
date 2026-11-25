@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import asyncio
 from collections import deque
+from collections.abc import Mapping
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
-from typing import Mapping
+from datetime import UTC, datetime, timedelta
 
 
 @dataclass(frozen=True, slots=True)
@@ -112,7 +112,7 @@ class ProviderRateLimiter:
         """
         while True:
             async with self._lock:
-                now = datetime.now(timezone.utc)
+                now = datetime.now(UTC)
                 self._prune(now)
 
                 delay = self._required_wait(now)
@@ -156,12 +156,12 @@ class ProviderRateLimiter:
                 normalized_headers.get("retry-after")
             )
             self._metadata = dict(normalized_headers)
-            self._last_observed_at = datetime.now(timezone.utc)
+            self._last_observed_at = datetime.now(UTC)
 
     async def snapshot(self) -> RateLimitSnapshot:
         """Return the current limiter state without making a request."""
         async with self._lock:
-            now = datetime.now(timezone.utc)
+            now = datetime.now(UTC)
             self._prune(now)
 
             return RateLimitSnapshot(
