@@ -45,7 +45,7 @@ from backend.execution.orders import (
     create_stake_order,
 )
 from backend.execution.stake_link import link_stake_fixtures, store_parsed
-from backend.execution.stake_parse import parse_payload
+from backend.execution.stake_parse import parse_payload, parse_start
 from backend.execution.stake_requests import (
     MULTI_SUFFIX,
     TemplateError,
@@ -267,8 +267,10 @@ async def heartbeat(body: Heartbeat) -> dict[str, Any]:
             op = (await session.execute(select(StakeOperation).where(
                 StakeOperation.operation_name == list_name))).scalar_one_or_none()
             if op:
-                bet_list_request = {"operationName": op.operation_name, "query": op.query,
-                                    "variables": op.sample_variables}
+                variables = dict(op.sample_variables or {})
+                if "limit" in variables:
+                    variables["limit"] = 50  # all open bets, not just the first few
+                bet_list_request = {"operationName": op.operation_name, "query": op.query, "variables": variables}
         await session.commit()
     return {"learn_mode": learn, "execution_enabled": enabled, "poll_seconds": 5,
             "bet_list_request": bet_list_request, "bet_list_every_seconds": 60}
@@ -416,11 +418,7 @@ async def order_result(order_id: int, body: OrderResult) -> dict[str, Any]:
 async def _store_stake_bets(session: AsyncSession, bets: list[dict[str, Any]]) -> None:
     for b in bets:
         values = {**b}
-        placed = values.pop("placed_at", None)
-        try:
-            values["placed_at"] = datetime.fromisoformat(str(placed).replace("Z", "+00:00")) if placed else None
-        except ValueError:
-            values["placed_at"] = None
+        values["placed_at"] = parse_start(values.pop("placed_at", None))  # Stake uses "Wed, 25 Nov 2026 12:11:39 GMT"
         statement = insert(StakeBet).values(**values)
         await session.execute(statement.on_conflict_do_update(
             index_elements=["id"], set_={k: statement.excluded[k] for k in values if k != "id"}))

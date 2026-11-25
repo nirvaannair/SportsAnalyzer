@@ -80,7 +80,7 @@ def build_bet_variables(sample: dict[str, Any], outcome_id: str | list[str], amo
                 elif _CURRENCY.search(key) and isinstance(value, str):
                     node[key] = currency
                     replaced.add("currency")
-                elif _IDENTIFIER.search(key) and isinstance(value, str):
+                elif _IDENTIFIER.search(key) and isinstance(value, str) and value:
                     # A fresh one-time key in the same format Stake used (UUID or short code).
                     node[key] = str(uuid.uuid4()) if _UUID.match(value) else uuid.uuid4().hex[:max(len(value), 8)]
                 else:
@@ -193,7 +193,11 @@ def _num(value: Any) -> float | None:
 
 
 def parse_sport_bets(payload: Any) -> list[dict[str, Any]]:
-    """Sports bets (singles and multis) from a Stake "My Bets" response, wherever they sit."""
+    """The OWNER's sports bets (singles and multis) from a Stake "My Bets" response.
+
+    Only bets inside a `user { ... }` object count. Stake pages also show other people's bets
+    (e.g. the public high-roller board); those never sit under `user` and are ignored.
+    """
     bets: dict[str, dict[str, Any]] = {}
 
     def describe(node: dict[str, Any]) -> str:
@@ -207,15 +211,15 @@ def parse_sport_bets(payload: Any) -> list[dict[str, Any]]:
             parts.append(" · ".join(p for p in (fixture.get("name"), name) if p))
         return " + ".join(p for p in parts if p)[:500]
 
-    def walk(node: Any) -> None:
+    def walk(node: Any, own: bool = False) -> None:
         if isinstance(node, list):
             for value in node:
-                walk(value)
+                walk(value, own)
             return
         if not isinstance(node, dict):
             return
         kind = str(node.get("__typename") or "")
-        if kind in ("SportBet", "SwishBet") and node.get("id"):
+        if own and kind in ("SportBet", "SwishBet") and node.get("id"):
             bets[str(node["id"])] = {
                 "id": str(node["id"]), "status": node.get("status"), "active": node.get("active"),
                 "amount": _num(node.get("amount")), "currency": node.get("currency"),
@@ -227,8 +231,9 @@ def parse_sport_bets(payload: Any) -> list[dict[str, Any]]:
                 "placed_at": node.get("createdAt"),
                 "raw": node,
             }
-        for value in node.values():
-            walk(value)
+            return
+        for key, value in node.items():
+            walk(value, own or (key == "user" and isinstance(value, dict)))
 
     walk(payload)
     return list(bets.values())

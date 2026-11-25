@@ -71,3 +71,17 @@ def test_parse_sport_bets() -> None:
     (bet,) = parse_sport_bets(data)
     assert bet["id"] == "b1" and bet["potential_multiplier"] == 2.37 and bet["cashout_multiplier"] == 0.9
     assert "Vanraure" in bet["description"]
+
+
+def test_other_peoples_bets_are_ignored() -> None:
+    board = {"highrollerSportBets": [{"__typename": "Bet", "bet": {
+        "__typename": "SportBet", "id": "stranger", "amount": 1041, "currency": "usdt", "potentialMultiplier": 1.57}}]}
+    assert parse_sport_bets(board) == []
+    mixed = {"user": {"activeSportBets": [{"__typename": "SportBet", "id": "mine", "amount": 1}]}, **board}
+    assert [b["id"] for b in parse_sport_bets(mixed)] == ["mine"]
+
+
+def test_empty_identifier_is_kept() -> None:
+    sample = {"amount": 1, "currency": "inr", "outcomeIds": ["a", "b"], "identifier": "", "idempotencyKey": "k"}
+    v = build_bet_request("X", "mutation X { y }", sample, ["c", "d"], 1.0, "inr")["variables"]
+    assert v["identifier"] == "" and v["idempotencyKey"] != "k"
