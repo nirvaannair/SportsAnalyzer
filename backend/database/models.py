@@ -288,3 +288,48 @@ class ProviderEntityMapping(Base):
         Index("ix_provider_entity_mappings_status", "entity_type", "status"),
         Index("ix_provider_entity_mappings_canonical", "entity_type", "canonical_id"),
     )
+
+
+# ---------------------------------------------------------------------------
+# Models and predictions
+# ---------------------------------------------------------------------------
+
+
+class ModelRun(Base):
+    """One training/backtest run of one model. Metrics are computed on real results."""
+
+    __tablename__ = "model_runs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    model: Mapped[str] = mapped_column(String(48), nullable=False)  # elo, dixon_coles, blend
+    kind: Mapped[str] = mapped_column(String(16), nullable=False)  # backtest | live
+    params: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default="{}")
+    metrics: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default="{}")
+    trained_until: Mapped[date | None] = mapped_column(Date)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (Index("ix_model_runs_model_kind", "model", "kind", "created_at"),)
+
+
+class Prediction(Base):
+    """A model's pre-match probabilities for one match. Never derived from odds."""
+
+    __tablename__ = "predictions"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    run_id: Mapped[int] = mapped_column(ForeignKey("model_runs.id", ondelete="CASCADE"), nullable=False)
+    match_id: Mapped[int] = mapped_column(ForeignKey("matches.id", ondelete="CASCADE"), nullable=False)
+    p_home: Mapped[float] = mapped_column(Float, nullable=False)
+    p_draw: Mapped[float] = mapped_column(Float, nullable=False)
+    p_away: Mapped[float] = mapped_column(Float, nullable=False)
+    p_over25: Mapped[float | None] = mapped_column(Float)
+    p_btts: Mapped[float | None] = mapped_column(Float)
+    exp_home_goals: Mapped[float | None] = mapped_column(Float)
+    exp_away_goals: Mapped[float | None] = mapped_column(Float)
+
+    __table_args__ = (
+        UniqueConstraint("run_id", "match_id", name="uq_predictions_run_match"),
+        Index("ix_predictions_match", "match_id"),
+    )

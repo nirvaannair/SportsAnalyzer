@@ -36,6 +36,39 @@ export type MatchRow = {
   ht_home_goals: number | null
   ht_away_goals: number | null
   odds_1x2: { bookmaker: string; kind: 'open' | 'close'; home: number; draw: number; away: number } | null
+  prediction: Prediction | null
+}
+
+export type Prediction = {
+  source: 'live' | 'backtest'
+  p_home: number
+  p_draw: number
+  p_away: number
+  p_over25: number | null
+  p_btts: number | null
+  exp_home_goals: number | null
+  exp_away_goals: number | null
+}
+
+export type Score1x2 = { logloss: number; brier: number; rps: number; accuracy: number }
+export type ModelSummary = {
+  model: 'elo' | 'dixon_coles' | 'blend'
+  created_at: string
+  default: boolean
+  live_trained_until: string | null
+  params: Record<string, unknown>
+  metrics: {
+    n: number
+    '1x2': Score1x2
+    baseline_1x2: Score1x2
+    ou25_logloss?: number
+    btts_logloss?: number
+    calibration_1x2: { bucket: string; predicted: number; observed: number; count: number }[]
+    by_season: ({ season: number; n: number } & Score1x2)[]
+    by_league: ({ league: string; n: number } & Score1x2)[]
+    market_reference_1x2?: (Score1x2 & { n: number }) | null
+    simulated_bets?: { market: string; edge_threshold: number; bets: number; profit_units: number; roi: number }[]
+  }
 }
 
 export type Candidate = { team_id: number; name: string; fixture_score: number | null; name_score: number }
@@ -78,6 +111,7 @@ export const api = {
     request<{ total: number; items: MatchRow[] }>(
       `/api/matches?league=${league}&season=${season}&limit=${limit}&offset=${offset}`,
     ),
+  models: () => request<ModelSummary[]>('/api/models'),
   identityReview: () => request<IdentityReview>('/api/identity/review'),
   resolveMapping: (id: number, teamId: number) => post(`/api/identity/${id}/resolve`, { team_id: teamId }),
   rejectMapping: (id: number) => post(`/api/identity/${id}/reject`),

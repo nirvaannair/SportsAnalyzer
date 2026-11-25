@@ -2,7 +2,10 @@
 
     .venv/Scripts/python -m backend.cli import-fdcuk                 # all leagues, 2015/16 to now
     .venv/Scripts/python -m backend.cli import-fdcuk --from 2023 --leagues ENG1,ESP1
+    .venv/Scripts/python -m backend.cli import-fixtures                # upcoming matches, next few days
     .venv/Scripts/python -m backend.cli sync-api-football --season 2023
+    .venv/Scripts/python -m backend.cli backtest                       # walk-forward test of the models
+    .venv/Scripts/python -m backend.cli predict                        # predict upcoming matches
     .venv/Scripts/python -m backend.cli resolve-teams
     .venv/Scripts/python -m backend.cli summary
 """
@@ -28,8 +31,9 @@ load_dotenv(ENV_FILE)
 
 def current_season_start(today: date | None = None) -> int:
     """European seasons start in July/August: Nov 2026 -> 2026, Mar 2027 -> 2026."""
-    today = today or date.today()
-    return today.year if today.month >= 7 else today.year - 1
+    from backend.ingestion.fdcuk import season_start_for
+
+    return season_start_for(today or date.today())
 
 
 def _leagues(arg: str | None):
@@ -59,6 +63,31 @@ async def cmd_import_fdcuk(args: argparse.Namespace) -> None:
     for r in results:
         by_status[r.status] = by_status.get(r.status, 0) + 1
     print("Done:", ", ".join(f"{n} {s}" for s, n in sorted(by_status.items())), flush=True)
+
+
+async def cmd_import_fixtures(args: argparse.Namespace) -> None:
+    from backend.ingestion.fdcuk import import_fixtures
+
+    counts = await import_fixtures(AsyncSessionFactory, _leagues(args.leagues))
+    print("Upcoming fixtures:", ", ".join(f"{code} {n}" for code, n in counts.items()), flush=True)
+
+
+async def cmd_backtest(args: argparse.Namespace) -> None:
+    from backend.pipeline import backtest_and_store
+
+    async with AsyncSessionFactory() as session:
+        await backtest_and_store(session, date.fromisoformat(args.start), lambda m: print(m, flush=True))
+        await session.commit()
+    print("Backtest stored. See the Models page.", flush=True)
+
+
+async def cmd_predict(_: argparse.Namespace) -> None:
+    from backend.pipeline import predict_and_store
+
+    async with AsyncSessionFactory() as session:
+        counts = await predict_and_store(session, date.today())
+        await session.commit()
+    print("Predictions for upcoming matches:", ", ".join(f"{m} {n}" for m, n in counts.items()), flush=True)
 
 
 async def cmd_sync_api_football(args: argparse.Namespace) -> None:
@@ -102,6 +131,16 @@ def main() -> None:
     p.add_argument("--leagues", help="comma-separated codes, e.g. ENG1,ESP1 (default: all)")
     p.add_argument("--force", action="store_true", help="re-parse files even if unchanged")
     p.set_defaults(func=cmd_import_fdcuk)
+
+    p = sub.add_parser("import-fixtures", help="Import upcoming fixtures (next few days) with current odds")
+    p.add_argument("--leagues", help="comma-separated codes (default: all)")
+    p.set_defaults(func=cmd_import_fixtures)
+
+    p = sub.add_parser("backtest", help="Walk-forward backtest of all models (odds-free), stored for the dashboard")
+    p.add_argument("--start", default="2018-07-01", help="first prediction date (YYYY-MM-DD)")
+    p.set_defaults(func=cmd_backtest)
+
+    sub.add_parser("predict", help="Predict upcoming matches with all models").set_defaults(func=cmd_predict)
 
     p = sub.add_parser("sync-api-football", help="Fetch API-Football fixtures and match their team IDs")
     p.add_argument("--season", type=int, required=True, help="season start year, e.g. 2023")

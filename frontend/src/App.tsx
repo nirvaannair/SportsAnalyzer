@@ -10,6 +10,7 @@ import { api } from './lib/api'
 import DataSources from './pages/DataSources'
 import IdentityReview from './pages/IdentityReview'
 import Matches from './pages/Matches'
+import Models from './pages/Models'
 import Overview from './pages/Overview'
 import Placeholder from './pages/Placeholder'
 
@@ -35,7 +36,7 @@ const NAV: { section: string; items: NavItem[] }[] = [
   {
     section: 'Analysis',
     items: [
-      { to: '/models', label: 'Models', icon: Brain, phase: 3, blurb: 'Backtests, calibration, log loss and closing line value per model version.' },
+      { to: '/models', label: 'Models', icon: Brain },
       { to: '/news', label: 'Team news', icon: Newspaper, phase: 2, blurb: 'Injury and suspension feed linked to players, with estimated match impact.' },
     ],
   },
@@ -130,6 +131,7 @@ export default function App() {
             <Route path="/" element={<Overview />} />
             <Route path="/sources" element={<DataSources />} />
             <Route path="/matches" element={<Matches />} />
+            <Route path="/models" element={<Models />} />
             <Route path="/identity" element={<IdentityReview />} />
             {placeholders.map((item) => (
               <Route
