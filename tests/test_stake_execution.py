@@ -11,6 +11,7 @@ from backend.execution.stake_requests import (
     TemplateError,
     bet_result,
     build_bet_request,
+    describe_operation,
     extract_outcomes,
     is_bet_mutation,
 )
@@ -85,3 +86,21 @@ def test_bet_result_parsing() -> None:
     assert bet_result({"data": {"sportBet": {"id": "b1"}}}) == (True, "b1", "Placed")
     assert bet_result({"errors": [{"message": "insufficientBalance"}]})[0] is False
     assert bet_result({"data": {"sportBet": None}})[0] is False
+
+
+def test_describe_operation_without_operation_name() -> None:
+    assert describe_operation(None, "mutation SportBet($amount: Float!) { sportBet(amount: $amount) { id } }") == (
+        "SportBet", "mutation")
+    assert describe_operation(None, "  mutation { sportBet(amount: 1) { id } }") == ("sportBet", "mutation")
+    assert describe_operation(None, "query { user { id } }") == ("user", "query")
+    assert describe_operation("Given", "query Other { x }") == ("Given", "query")
+    assert describe_operation(None, "{ user { id } }") == ("user", "query")
+    assert describe_operation(None, "not graphql") is None
+
+
+def test_idempotency_key_keeps_uuid_format() -> None:
+    sample = {"amount": 1, "currency": "inr", "outcomeIds": ["a"], "idempotencyKey": "e12e06f8-8ade-4d9e-a3f8-3a3266e50a8f"}
+    v = build_bet_request("BetSlipFooter_SportBet", "mutation X { y }", sample, "b", 1.0, "inr")["variables"]
+    import re
+    assert re.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", v["idempotencyKey"])
+    assert v["idempotencyKey"] != sample["idempotencyKey"] and v["outcomeIds"] == ["b"]

@@ -311,6 +311,13 @@ The ladder's risk grows exponentially: a 5-step ladder at odds of 2.0 needs five
 
 ---
 
+### 6.1 Controls on the Overview page (agreed 2026-11-25)
+
+- **Active strategies:** pick which strategies run (flat, fractional Kelly, compounding %, ladder…), each with its own bankroll.
+- **Reinvest % of winnings:** of every winning bet's profit, X% goes back into the compounding pot and the rest is banked (locked profit). 0% = flat staking, 100% = full compounding.
+- **Mode per strategy:** `paper` → `approve` (you click each bet) → `auto` (bets go straight to Stake through the helper, no click).
+- **Auto mode is still bounded** by per-bet cap, daily cap, bankroll %, drawdown kill switch and the global Execution switch. It is switched on by you, after paper trading shows calibrated, profitable results.
+
 ## 7. Stake integration: important findings
 
 I read the `StakeAPI` package in your main checkout (`chipadevteam/StakeAPI`). Here is what it actually does:

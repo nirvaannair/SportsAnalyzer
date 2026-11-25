@@ -18,8 +18,31 @@ _CURRENCY = re.compile(r"^currency$", re.I)
 _OUTCOME_LIST = re.compile(r"^outcomeIds$", re.I)
 _OUTCOME_ONE = re.compile(r"^outcomeId$", re.I)
 _IDENTIFIER = re.compile(r"^identifier$|idempotency", re.I)
+_UUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.I)
 
 BET_MUTATION_HINT = re.compile(r"bet", re.I)
+_OPERATION = re.compile(r"^\s*(query|mutation|subscription)(?![A-Za-z0-9_])\s*([A-Za-z_][A-Za-z0-9_]*)?")
+_FIRST_FIELD = re.compile(r"\{\s*([A-Za-z_][A-Za-z0-9_]*)")
+
+
+def describe_operation(operation_name: str | None, query: str) -> tuple[str, str] | None:
+    """(name, kind) for a GraphQL request, even when the client sent no operationName.
+
+    Falls back to the name inside the query text ("mutation SportBet(...)"), then to the
+    first field it selects ("mutation { sportBet(...) }" -> "sportBet").
+    """
+    match = _OPERATION.match(query or "")
+    if match:
+        kind = match.group(1)
+        name = operation_name or match.group(2)
+    elif (query or "").lstrip().startswith("{"):
+        kind, name = "query", operation_name  # shorthand query
+    else:
+        return None
+    if not name:
+        field = _FIRST_FIELD.search(query or "")
+        name = field.group(1) if field else None
+    return (name, kind) if name else None
 
 
 def is_bet_mutation(operation_name: str, kind: str) -> bool:
@@ -51,7 +74,8 @@ def build_bet_variables(sample: dict[str, Any], outcome_id: str, amount: float, 
                     node[key] = currency
                     replaced.add("currency")
                 elif _IDENTIFIER.search(key) and isinstance(value, str):
-                    node[key] = uuid.uuid4().hex[:21]
+                    # A fresh one-time key in the same format Stake used (UUID or short code).
+                    node[key] = str(uuid.uuid4()) if _UUID.match(value) else uuid.uuid4().hex[:max(len(value), 8)]
                 else:
                     node[key] = walk(value)
         elif isinstance(node, list):

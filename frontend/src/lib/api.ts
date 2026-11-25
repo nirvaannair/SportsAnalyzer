@@ -126,7 +126,7 @@ export type ScraperTotals = {
 
 export type StakeStatus = {
   helper: { connected: boolean; last_seen?: string; host?: string; version?: string; token_source?: string;
-            error?: string | null; balances?: { available: Record<string, number>; vault: Record<string, number> } | null }
+            error?: string | null; hook?: { fetchSeen: number; xhrSeen: number; captured: number; unreadable: number } | null; balances?: { available: Record<string, number>; vault: Record<string, number> } | null }
   execution_enabled: boolean
   learn_mode: boolean
   limits: { max_bet: number; budget: number; max_bets_per_day: number; currency: string }
@@ -138,7 +138,8 @@ export type StakeStatus = {
   orders_by_status: Record<string, number>
 }
 export type StakeOutcome = { outcome_id: string; fixture: string | null; market: string | null; name: string;
-                             price: number | null; active: boolean | null; seen_at: string }
+                             selection: string | null; price: number | null; active: boolean | null; seen_at: string
+                             league: string | null; start_time: string | null; match_id: number | null }
 export type StakeOrder = {
   id: number; created_at: string; source: string; outcome_id: string; description: string; amount: number
   currency: string; min_price: number | null; status: string; status_detail: string | null
@@ -185,7 +186,8 @@ export const api = {
   stopScrape: (id: number) => post(`/api/scraper/runs/${id}/stop`),
   stakeStatus: () => request<StakeStatus>('/api/stake/status'),
   stakeSettings: (body: { execution_enabled?: boolean; learn_mode?: boolean }) => post('/api/stake/settings', body),
-  stakeOutcomes: (q: string) => request<StakeOutcome[]>(`/api/stake/outcomes?q=${encodeURIComponent(q)}`),
+  stakeOutcomes: (q: string, mainMarkets = true) =>
+    request<StakeOutcome[]>(`/api/stake/outcomes?q=${encodeURIComponent(q)}&main_markets=${mainMarkets}`),
   stakeOperations: () => request<{ name: string; kind: string; seen: number; last_seen_at: string; is_bet: boolean }[]>('/api/stake/operations'),
   stakeOrders: () => request<StakeOrder[]>('/api/stake/orders'),
   stakeCreateOrder: (outcome_id: string, amount: number) => post<StakeOrder>('/api/stake/orders', { outcome_id, amount }),
