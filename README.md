@@ -16,6 +16,21 @@ A personal, locally run football analytics and betting system. It pulls in data 
 - Bets placed on **Stake** (INR wallet, ₹500 deposited) through automation, tested with **₹1 bets**. **End goal: fully automatic betting** with **compounding**. On the Overview page the owner sets **which strategies run, the % of winnings reinvested**, and each strategy's mode **paper / approve / auto**.
 - **Real, trained machine-learning models** (not just statistical baselines), trained on **all** collected data **including the scraped player data**, with **visible training progress** on the dashboard. Separate models per league are fine, but **teams from different leagues meet** (European cups, domestic cups, promotion/relegation), so strength must be comparable **across leagues**. Use the laptop's **GPU (NVIDIA RTX 4050 Laptop, 6 GB, CUDA driver 610)** for training.
 - **Individual player information** in the app: player pages with minutes, stats, impact with/without, form.
+- **Player and squad models:** how much each player adds; **which lineup from the current squad plays best** (squad
+  coordination); and **transfer what-ifs**: "if this player joins, how much do the team's win chances rise?".
+- **One model family across leagues:** per-league models are fine, but **teams from different leagues meet**, so the
+  models must share one cross-league strength scale (European and domestic cups, promotion and relegation).
+
+**Betting requirements (added 2026-11-25):**
+- The system **doesn't bet on every prediction.** It selects bets, and may include **low- and mid-probability
+  outcomes** when Stake's price makes them good value, not only favourites. Each strategy has a confidence band
+  (min/max model probability). This needs **Stake's live odds** (captured by the helper).
+- **Multi bets (accumulators):** combine several selections into one Stake multi, where all legs must win for the
+  combined payout.
+- **Estimated total payout** of all bets currently in play (and the stake at risk), shown on the dashboard.
+- **Large bets need approval even in Auto mode:** above an approval threshold (e.g. ₹1,000, set by the owner) a bet
+  waits for the owner's click before it goes to Stake.
+- **Cash-out:** show Stake's current cash-out value for open bets, and let the owner cash out from the dashboard.
 - A polished, clean, minimal dark dashboard. The owner wants to **see the commands that run** (Terminal tabs) and **check the UI regularly**.
 - The owner is new to Claude Code; explain plainly. **Keep this README current** so a fresh chat can continue.
 
@@ -56,11 +71,24 @@ A personal, locally run football analytics and betting system. It pulls in data 
 - 35 ESPN teams (mostly Spain) stay unmatched until the backfill provides evidence; they show on Identity review.
 
 ### Next steps (in order)
-1. **ML training system:** a `training_runs` table with live progress (epoch, loss, validation metrics) and a **Training** page; GPU via PyTorch CUDA and LightGBM/XGBoost GPU. Models: gradient-boosted trees and a neural net on point-in-time features (ratings, form, xG proxies, schedule, **player availability/impact**), with no odds as inputs. Walk-forward validation as in §5.6. Register each trained model so strategies can pick it.
-2. **Cross-league strength:** add European competitions and domestic cups to the ESPN spider so teams from different leagues are linked by real matches; fit one global rating with league offsets, plus per-league fine-tuning.
-3. **Player layer** (when the backfill completes): player pages, regularised adjusted plus-minus (impact per 90 with/without), lineup-adjusted strength, player vs opponent-style; then the **3D style maps**.
-4. **Injury/news spiders** (Scrapy) feeding availability features.
-5. Retrain, backtest, paper-trade; compare with the market; only then consider auto mode with real money.
+1. **Betting upgrades:** a confidence band per strategy (low/mid/high model probability); an **approval threshold**
+   that forces approval above an amount even in Auto (`STAKE_APPROVAL_ABOVE`); **estimated total payout** of open
+   bets; Stake **multi bets** (learn the multi-bet request from one manual multi with Learn mode on; a strategy kind
+   `multi` with 2–4 legs from different matches); **cash-out** (learn Stake's cash-out query and mutation from the
+   owner's My Bets page; show values; cash out on the owner's click).
+2. **ML training system:** a `training_runs` table with live progress (epoch, loss, validation metrics) and a
+   **Training** page; GPU via PyTorch CUDA and LightGBM/XGBoost GPU. Gradient-boosted trees + a neural net on
+   point-in-time features (ratings, form, schedule, **player availability/impact**); no odds as inputs. Walk-forward
+   validation (§5.6). Each trained model is registered so strategies can choose it.
+3. **Cross-league strength:** add European competitions and domestic cups to the ESPN spider; **one global model
+   with league-level strength offsets** (hierarchical), optionally fine-tuned per league. Not fully separate
+   per-league models, because teams from different leagues meet.
+4. **Player layer** (when the backfill completes): player pages; regularised adjusted plus-minus (impact per 90,
+   attack and defence); lineup-adjusted team strength; **best-XI search** over the current squad; **transfer
+   what-if** (add a player's impact rating to the expected XI and re-predict); player vs opponent style; then the
+   **3D style maps**.
+5. **Injury/news spiders** (Scrapy) feeding availability features.
+6. Retrain, backtest, paper-trade; compare with the market; only then consider Auto mode with real money.
 
 ### Tools and stack
 Python 3.12 (`.venv`), FastAPI + uvicorn, SQLAlchemy 2 (async with asyncpg; psycopg for Scrapy), Alembic, PostgreSQL 17 in Docker, pandas/numpy/scipy/scikit-learn, Scrapy, httpx/aiohttp; React 19 + Vite + TypeScript + Tailwind v4 + TanStack Query + lucide icons; a Chrome MV3 extension; pytest + ruff. GitHub: `nirvaannair/SportsAnalyzer` (work happens on branch `claude/football-betting-ml-analyzer-e7dd8d` and is merged through PRs; `gh` is at `C:\Program Files\GitHub CLI\gh.exe`, not on PATH).
