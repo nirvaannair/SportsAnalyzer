@@ -8,6 +8,8 @@ import { NavLink, Navigate, Route, Routes } from 'react-router-dom'
 import { StatusDot } from './components/ui'
 import { api } from './lib/api'
 import DataSources from './pages/DataSources'
+import IdentityReview from './pages/IdentityReview'
+import Matches from './pages/Matches'
 import Overview from './pages/Overview'
 import Placeholder from './pages/Placeholder'
 
@@ -24,7 +26,7 @@ const NAV: { section: string; items: NavItem[] }[] = [
     section: 'Betting',
     items: [
       { to: '/', label: 'Overview', icon: LayoutDashboard },
-      { to: '/fixtures', label: 'Fixtures', icon: CalendarDays, phase: 3, blurb: 'Upcoming matches with model probabilities, fair odds and edge against the market.' },
+      { to: '/matches', label: 'Matches', icon: CalendarDays },
       { to: '/value', label: 'Value bets', icon: Sparkles, phase: 4, blurb: 'Opportunities ranked by edge and confidence, with approve and reject for approve-mode strategies.' },
       { to: '/ledger', label: 'Bet ledger', icon: Receipt, phase: 4, blurb: 'Every proposed, placed and settled bet with odds taken, closing odds and P&L.' },
       { to: '/strategies', label: 'Strategies', icon: Layers, phase: 4, blurb: 'Flat, fractional Kelly and compounding strategies with bankroll limits and kill switches.' },
@@ -41,7 +43,7 @@ const NAV: { section: string; items: NavItem[] }[] = [
     section: 'System',
     items: [
       { to: '/sources', label: 'Data sources', icon: Database },
-      { to: '/identity', label: 'Identity review', icon: GitMerge, phase: 1, blurb: 'Provider teams and players that could not be matched automatically, ready for one-click review.' },
+      { to: '/identity', label: 'Identity review', icon: GitMerge },
       { to: '/settings', label: 'Settings', icon: Settings, phase: 1, blurb: 'Schedules, thresholds and key status.' },
     ],
   },
@@ -49,6 +51,8 @@ const NAV: { section: string; items: NavItem[] }[] = [
 
 function Sidebar() {
   const health = useQuery({ queryKey: ['health'], queryFn: api.health })
+  const summary = useQuery({ queryKey: ['summary'], queryFn: api.summary })
+  const reviewCount = summary.data?.identity_review ?? 0
   const dbTone = health.isError ? 'bad' : health.data?.database.ok ? 'ok' : health.isLoading ? 'off' : 'bad'
   const dbLabel = health.isError
     ? 'API offline'
@@ -88,6 +92,9 @@ function Sidebar() {
                     <Icon className="size-4" />
                     <span className="flex-1">{label}</span>
                     {phase && <span className="text-[10px] text-zinc-400 dark:text-zinc-600">P{phase}</span>}
+                    {to === '/identity' && reviewCount > 0 && (
+                      <span className="tabular rounded-full bg-amber-100 px-1.5 text-[10px] font-medium text-amber-700 dark:bg-amber-950 dark:text-amber-300">{reviewCount}</span>
+                    )}
                   </NavLink>
                 </li>
               ))}
@@ -122,6 +129,8 @@ export default function App() {
           <Routes>
             <Route path="/" element={<Overview />} />
             <Route path="/sources" element={<DataSources />} />
+            <Route path="/matches" element={<Matches />} />
+            <Route path="/identity" element={<IdentityReview />} />
             {placeholders.map((item) => (
               <Route
                 key={item.to}

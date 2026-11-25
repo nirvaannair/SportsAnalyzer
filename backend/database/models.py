@@ -1,9 +1,25 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
+from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import DateTime, Index, Integer, String, Text, func
+from sqlalchemy import (
+    BigInteger,
+    Boolean,
+    Date,
+    DateTime,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    Numeric,
+    SmallInteger,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+)
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -140,4 +156,135 @@ class RawProviderObservation(Base):
             "ix_raw_provider_observations_received_at",
             "received_at",
         ),
+    )
+
+# ---------------------------------------------------------------------------
+# Canonical football model
+#
+# One row per real-world thing, whichever providers mention it. Provider IDs
+# live only in ProviderEntityMapping.
+# ---------------------------------------------------------------------------
+
+
+class Competition(Base):
+    __tablename__ = "competitions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    code: Mapped[str] = mapped_column(String(16), unique=True, nullable=False)
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    country: Mapped[str] = mapped_column(String(64), nullable=False)
+    tier: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+
+
+class Season(Base):
+    __tablename__ = "seasons"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    competition_id: Mapped[int] = mapped_column(
+        ForeignKey("competitions.id", ondelete="CASCADE"), nullable=False
+    )
+    start_year: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    label: Mapped[str] = mapped_column(String(16), nullable=False)
+
+    __table_args__ = (UniqueConstraint("competition_id", "start_year"),)
+
+
+class Team(Base):
+    __tablename__ = "teams"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    country: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (Index("ix_teams_country_name", "country", "name"),)
+
+
+class Match(Base):
+    __tablename__ = "matches"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    competition_id: Mapped[int] = mapped_column(ForeignKey("competitions.id"), nullable=False)
+    season_id: Mapped[int] = mapped_column(ForeignKey("seasons.id"), nullable=False)
+    match_date: Mapped[date] = mapped_column(Date, nullable=False)
+    kickoff_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    home_team_id: Mapped[int] = mapped_column(ForeignKey("teams.id"), nullable=False)
+    away_team_id: Mapped[int] = mapped_column(ForeignKey("teams.id"), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)  # scheduled | finished
+    home_goals: Mapped[int | None] = mapped_column(SmallInteger)
+    away_goals: Mapped[int | None] = mapped_column(SmallInteger)
+    ht_home_goals: Mapped[int | None] = mapped_column(SmallInteger)
+    ht_away_goals: Mapped[int | None] = mapped_column(SmallInteger)
+    stats: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default="{}")
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+    __table_args__ = (
+        UniqueConstraint("home_team_id", "away_team_id", "match_date", name="uq_matches_teams_date"),
+        Index("ix_matches_season_date", "season_id", "match_date"),
+        Index("ix_matches_date", "match_date"),
+    )
+
+
+class OddsQuote(Base):
+    """One price for one selection. Historical and closing odds share this table."""
+
+    __tablename__ = "odds_quotes"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    match_id: Mapped[int] = mapped_column(
+        ForeignKey("matches.id", ondelete="CASCADE"), nullable=False
+    )
+    source: Mapped[str] = mapped_column(String(32), nullable=False)  # who reported it
+    bookmaker: Mapped[str] = mapped_column(String(32), nullable=False)  # pinnacle, bet365, avg, max
+    market: Mapped[str] = mapped_column(String(16), nullable=False)  # 1x2, ou25
+    selection: Mapped[str] = mapped_column(String(16), nullable=False)  # home, draw, away, over, under
+    price: Mapped[Decimal] = mapped_column(Numeric(8, 3), nullable=False)
+    is_closing: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    captured_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "match_id", "source", "bookmaker", "market", "selection", "is_closing",
+            name="uq_odds_quotes_identity",
+        ),
+    )
+
+
+class ProviderEntityMapping(Base):
+    """How one provider's ID for a team (or match, player...) maps to our canonical row.
+
+    status: active (resolved), unresolved (needs review), rejected (not one of ours).
+    """
+
+    __tablename__ = "provider_entity_mappings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    provider_name: Mapped[str] = mapped_column(String(64), nullable=False)
+    entity_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    provider_entity_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    provider_label: Mapped[str] = mapped_column(String(200), nullable=False)
+    context: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default="{}")
+    canonical_id: Mapped[int | None] = mapped_column(Integer)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    method: Mapped[str | None] = mapped_column(String(48))
+    confidence: Mapped[float | None] = mapped_column(Float)
+    candidates: Mapped[list[Any]] = mapped_column(JSONB, nullable=False, server_default="[]")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+    __table_args__ = (
+        UniqueConstraint("provider_name", "entity_type", "provider_entity_id",
+                         name="uq_provider_entity_mappings_key"),
+        Index("ix_provider_entity_mappings_status", "entity_type", "status"),
+        Index("ix_provider_entity_mappings_canonical", "entity_type", "canonical_id"),
     )

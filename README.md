@@ -26,6 +26,16 @@ docker compose up -d --wait db                                    # Postgres 17 
 npm --prefix frontend run dev                                     # dashboard on http://localhost:5173
 ```
 
+Data (safe to re-run; unchanged files are skipped):
+
+```powershell
+.\.venv\Scripts\python -m backend.cli import-fdcuk                      # results + odds, 2015/16 to now (~25 min first time)
+.\.venv\Scripts\python -m backend.cli import-fdcuk --from 2026          # just refresh the current season
+.\.venv\Scripts\python -m backend.cli sync-api-football --season 2023   # 10 API-Football requests, then team matching
+.\.venv\Scripts\python -m backend.cli resolve-teams                     # re-run team matching
+.\.venv\Scripts\python -m backend.cli summary                           # what is in the database
+```
+
 Checks:
 
 ```powershell
@@ -36,12 +46,20 @@ npm --prefix frontend run build          # type-check + build the dashboard
 
 | Path | What lives there |
 |---|---|
-| `backend/api/` | FastAPI app the dashboard calls (`/api/health`, `/api/providers`) |
+| `backend/api/` | FastAPI app the dashboard calls |
+| `backend/cli.py` | Command line for imports and maintenance |
+| `backend/core/leagues.py` | The 10 tracked leagues and each provider's league ID |
+| `backend/ingestion/` | Importers: football-data.co.uk, API-Football |
 | `backend/integrations/` | Provider adapters, rate limiter, raw payload storage |
-| `backend/identity/` | Canonical entities and provider-ID mapping |
+| `backend/identity/` | Name normalization and team matching across providers |
 | `backend/database/`, `alembic/` | SQLAlchemy models and migrations |
 | `frontend/` | React + Vite + Tailwind dashboard |
 | `tests/` | pytest suite |
+
+### Data notes
+
+- **football-data.co.uk is the seed source.** It defines the canonical teams and matches; every other provider's teams are matched to them (by shared results first, names second). Anything uncertain goes to the dashboard's Identity review page.
+- **Closing-odds coverage:** 2015/16–2018/19 have Pinnacle closing odds only; 2019/20–2024/25 have Pinnacle, Bet365 and the market average; **Pinnacle stops partway through 2025/26**. From then on, models are judged against the market-average closing price.
 
 ---
 
