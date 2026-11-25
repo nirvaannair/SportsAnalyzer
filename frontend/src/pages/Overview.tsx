@@ -1,4 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
+import InPlay from '../components/InPlay'
 import StrategyControls from '../components/StrategyControls'
 import { Badge, Card, CardHeader, PageHeader, Stat, StatusDot } from '../components/ui'
 import { api } from '../lib/api'
@@ -43,7 +44,8 @@ export default function Overview() {
       </div>
 
       <div className="mt-6 grid gap-6 lg:grid-cols-3">
-        <div className="lg:col-span-2">
+        <div className="space-y-6 lg:col-span-2">
+          <InPlay />
           <StrategyControls />
         </div>
 

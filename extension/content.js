@@ -3,7 +3,7 @@
 // learned, and, ONLY if execution is switched on in the dashboard, asks for the next bet
 // you approved and places it from this tab, using this tab's own logged-in session.
 
-const VERSION = '0.1.1';
+const VERSION = '0.1.2';
 const MARK = '__sportsanalyzer__';
 const POLL_MS = 5000;
 const BALANCES = `query UserBalances { user { id balances { available { amount currency } vault { amount currency } } } }`;
@@ -12,6 +12,7 @@ let learnMode = false;
 let busy = false;
 let captured = { operations: [], responses: [] };
 let hookStats = null; // what the in-page listener has noticed (counts only)
+let lastBetList = 0; // when your Stake bets were last refreshed
 
 const send = (message) => new Promise((resolve) => chrome.runtime.sendMessage(message, resolve));
 
@@ -108,7 +109,19 @@ async function tick() {
       captured = { operations: [], responses: [] };
       await send({ type: 'captured', payload: batch });
     }
-    if (beat.flags.execution_enabled) await placeNext();
+    // Refresh your Stake "My Bets" list (stakes, potential payouts, cash-out values) once a minute.
+    const listRequest = beat.flags.bet_list_request;
+    if (listRequest && Date.now() - lastBetList > (beat.flags.bet_list_every_seconds || 60) * 1000) {
+      lastBetList = Date.now();
+      try {
+        const data = await graphql(listRequest);
+        if (data && data.data) await send({ type: 'bets', payload: { data: data.data } });
+      } catch (_) {
+        // try again next minute
+      }
+    }
+    // Bets you approved, and cash-outs you clicked (cash-outs don't need Execution to be on).
+    await placeNext();
   } finally {
     busy = false;
   }

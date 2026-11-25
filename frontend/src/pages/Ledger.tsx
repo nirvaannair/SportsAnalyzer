@@ -70,9 +70,18 @@ export default function Ledger() {
                         {new Date(b.kickoff_at ?? b.date).toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })} · {b.strategy}
                       </div>
                     </td>
-                    <td className="whitespace-nowrap px-3 py-2.5">
-                      {SELECTION_LABEL[b.selection] ?? b.selection}
-                      <span className="ml-2 text-xs text-zinc-500">{b.mode}</span>
+                    <td className="px-3 py-2.5">
+                      <div className="whitespace-nowrap">
+                        {b.market === 'multi' ? `Multi · ${b.selection}` : SELECTION_LABEL[b.selection] ?? b.selection}
+                        <span className="ml-2 text-xs text-zinc-500">{b.mode}</span>
+                      </div>
+                      {b.legs && (
+                        <ul className="mt-1 space-y-0.5 text-xs text-zinc-500 dark:text-zinc-400">
+                          {b.legs.map((leg, i) => (
+                            <li key={i}>match #{leg.match_id} · {SELECTION_LABEL[leg.selection] ?? leg.selection} @ {leg.price.toFixed(2)}</li>
+                          ))}
+                        </ul>
+                      )}
                     </td>
                     <td className="tabular px-3 py-2.5 text-right">{Math.round(b.p_model * 100)}%</td>
                     <td className="tabular px-3 py-2.5 text-right" title={b.price_source === 'stake' ? "Stake's price" : 'Market average (paper only)'}>

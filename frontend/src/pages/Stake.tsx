@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Check, CircleDot, GraduationCap, Plug, Power, Search, X } from 'lucide-react'
 import { useState } from 'react'
 import { Badge, Card, CardHeader, EmptyState, PageHeader, StatusDot } from '../components/ui'
+import StakeBets from '../components/StakeBets'
 import { api, type StakeOrder } from '../lib/api'
 
 const ORDER_TONE: Record<string, 'ok' | 'warn' | 'off' | 'bad'> = {
@@ -122,7 +123,7 @@ export default function Stake() {
         <Card className="px-5 py-4">
           <div className="text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Limits</div>
           <div className="tabular mt-2 text-sm">
-            {s ? `${rupees(s.limits.max_bet)} per bet · ${s.limits.max_bets_per_day}/day` : '…'}
+            {s ? `${rupees(s.limits.max_bet)} per bet · ${s.limits.max_bets_per_day}/day · approval above ${rupees(s.limits.approval_above)}` : '…'}
           </div>
           <div className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">{s ? `${s.bets_today} sent today · change in .env` : ''}</div>
         </Card>
@@ -148,6 +149,11 @@ export default function Stake() {
                       : 'Listener not reporting. Reload the extension, then the Stake tab.'}
                   </div>
                 )}
+                <div className="mt-2 space-y-0.5 text-xs text-zinc-500 dark:text-zinc-400">
+                  <div>{s?.multi_request_learned ? '✓ Multi bets learned' : '○ Multi bets: place one multi by hand'}</div>
+                  <div>{s?.bet_list_learned ? '✓ My Bets list learned' : '○ My Bets: open My Bets → Sports → Active'}</div>
+                  <div>{s?.cashout_request_learned ? '✓ Cash-out learned' : '○ Cash-out: cash out one bet by hand'}</div>
+                </div>
                 <div className="mt-2 text-xs">
                   {s?.bet_request_learned
                     ? <span className="text-emerald-600 dark:text-emerald-400">✓ Bet request learned ({s.bet_operation})</span>
@@ -181,6 +187,10 @@ export default function Stake() {
             </ul>
           )}
         </Card>
+      </div>
+
+      <div className="mt-6">
+        <StakeBets listLearned={Boolean(s?.bet_list_learned)} cashoutLearned={Boolean(s?.cashout_request_learned)} />
       </div>
 
       <Card className="mt-6">

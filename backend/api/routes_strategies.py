@@ -22,20 +22,28 @@ DEFAULTS = [
     {"name": "Compounder (flat 2%, reinvest 100%)", "kind": "flat", "stake_pct": 2, "reinvest_pct": 100,
      "min_edge": 0.05},
     {"name": "Kelly quarter", "kind": "kelly", "kelly_fraction": 0.25, "reinvest_pct": 50, "min_edge": 0.07},
+    {"name": "Value outsiders (20-50%)", "kind": "flat", "stake_pct": 1, "reinvest_pct": 50, "min_edge": 0.08,
+     "min_prob": 0.2, "max_prob": 0.5},
+    {"name": "Treble (3-leg multi)", "kind": "multi", "multi_legs": 3, "stake_pct": 1, "reinvest_pct": 100,
+     "min_edge": 0.1, "min_prob": 0.4, "max_prob": 0.85},
 ]
 
 
 def _json(s: Strategy) -> dict[str, Any]:
     return {c: getattr(s, c) for c in (
         "id", "name", "kind", "mode", "enabled", "paused_reason", "model", "bankroll_start", "reinvest_pct",
-        "stake_pct", "kelly_fraction", "max_stake", "min_edge", "min_price", "max_price", "markets", "leagues",
+        "stake_pct", "kelly_fraction", "max_stake", "min_edge", "min_price", "max_price", "min_prob", "max_prob",
+        "multi_legs", "markets", "leagues",
         "max_bets_per_day", "drawdown_stop_pct", "created_at")}
 
 
 async def _ensure_defaults(session) -> None:
-    if (await session.execute(select(func.count()).select_from(Strategy))).scalar_one():
+    """Add any starter strategy that doesn't exist yet (all off, paper mode)."""
+    existing = set((await session.execute(select(Strategy.name))).scalars())
+    missing = [d for d in DEFAULTS if d["name"] not in existing]
+    if not missing:
         return
-    for d in DEFAULTS:
+    for d in missing:
         session.add(Strategy(mode="paper", enabled=False, bankroll_start=500.0, max_stake=10.0,
                              markets=["1x2", "ou25", "btts"], leagues=[], **d))
     await session.commit()
@@ -63,7 +71,7 @@ async def list_strategies() -> list[dict[str, Any]]:
 
 class StrategyFields(BaseModel):
     name: str | None = Field(None, min_length=1, max_length=80)
-    kind: Literal["flat", "kelly"] | None = None
+    kind: Literal["flat", "kelly", "multi"] | None = None
     mode: Literal["paper", "approve", "auto"] | None = None
     enabled: bool | None = None
     bankroll_start: float | None = Field(None, gt=0)
@@ -74,6 +82,9 @@ class StrategyFields(BaseModel):
     min_edge: float | None = Field(None, ge=0, le=1)
     min_price: float | None = Field(None, gt=1)
     max_price: float | None = Field(None, gt=1)
+    min_prob: float | None = Field(None, ge=0, le=1)
+    max_prob: float | None = Field(None, ge=0, le=1)
+    multi_legs: int | None = Field(None, ge=2, le=6)
     markets: list[str] | None = None
     leagues: list[str] | None = None
     max_bets_per_day: int | None = Field(None, ge=1, le=100)
@@ -150,7 +161,7 @@ async def bets(strategy_id: int | None = None, status: str | None = None, limit:
         "score": None if m.home_goals is None else f"{m.home_goals}–{m.away_goals}",
         "market": b.market, "selection": b.selection, "mode": b.mode, "p_model": b.p_model, "price": b.price,
         "price_source": b.price_source, "edge": b.edge, "stake": b.stake, "status": b.status, "profit": b.profit,
-        "order_status": order_status, "created_at": b.created_at, "settled_at": b.settled_at,
+        "order_status": order_status, "created_at": b.created_at, "settled_at": b.settled_at, "legs": b.legs,
     } for b, name, m, h, a, order_status in rows]
 
 

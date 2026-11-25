@@ -38,7 +38,7 @@ A personal, locally run football analytics and betting system. It pulls in data 
 1. **Models never use odds as inputs** or blend toward the market (§5.0). Enforced by `tests/test_odds_firewall.py`. Prices live in `odds_quotes` / `stake_outcomes` and are read only by `backend/evaluation`, `backend/strategies` and `backend/execution`.
 2. **Secrets never go to GitHub** (the repo is public). Keys live in `.env` (git-ignored); only `.env.example` is committed.
 3. **The assistant never places real-money bets itself** and never bypasses Cloudflare or other bot protection (no cf_clearance cookies, no browser impersonation). Real bets go out only from the owner's own Stake tab via the Chrome extension, only when the owner has switched Execution on, and only within the caps in `.env`.
-4. Default money limits: `STAKE_MAX_BET=1`, `STAKE_TEST_BUDGET=20`, `STAKE_MAX_BETS_PER_DAY=10` (₹).
+4. Default money limits: `STAKE_MAX_BET=1`, `STAKE_TEST_BUDGET=20`, `STAKE_MAX_BETS_PER_DAY=10`, `STAKE_APPROVAL_ABOVE=1000` (₹; bets above it always wait for a click, even in Auto). Cash-outs only happen on the owner's click.
 5. Ask before spending the owner's API-Football quota (100 requests/day on the free plan; 2024/25 is the season the plan covers).
 
 ### Status
@@ -56,6 +56,7 @@ A personal, locally run football analytics and betting system. It pulls in data 
 | Stake fixtures parsed and linked to our matches | ✅ (21/30 linked on first capture; La Liga waits for the backfill) | `backend/execution/stake_parse.py`, `stake_link.py` |
 | Strategies, compounding (reinvest %), paper/approve/auto, Overview controls, Bet ledger | ✅ (3 starter strategies, all off and in paper mode) | `backend/strategies/`, `backend/api/routes_strategies.py`, Overview + Bet ledger pages |
 | Automation loop in the API: every 15 min settle + strategy bets; every 6 h fixtures + predictions | ✅ | `backend/automation.py` |
+| Betting upgrades: confidence band per strategy, multi strategies (2–6 legs), approval threshold, In-play card (estimated total payout), Your Stake bets with cash-out | ✅ built; **needs three Learn-mode captures** (see Known issues) | `backend/strategies/core.py`, `backend/execution/orders.py`, `routes_stake.py`, extension v0.1.2 |
 | **Trained ML models** (GPU gradient boosting + neural net) with training-progress page | ⏳ **next** | |
 | Cross-league strength (European cups / domestic cups data) | ⏳ | |
 | Player pages + player impact model (with/without), player vs opponent style | ⏳ after the backfill finishes | |
@@ -69,13 +70,11 @@ A personal, locally run football analytics and betting system. It pulls in data 
 - ESPN's robots.txt returns 403 to automated tools (Scrapy treats that as "no rules"). Requests stay polite: one per 2 s, cached.
 - Stake GraphQL requests carry no `operationName`; names are parsed from the query text. The learned bet mutation is `BetSlipFooter_SportBet`.
 - 35 ESPN teams (mostly Spain) stay unmatched until the backfill provides evidence; they show on Identity review.
+- **Owner actions pending for the betting upgrades** (extension v0.1.2 must be reloaded at chrome://extensions first), each with Learn mode on: (1) open **My Bets → Sports → Active** (teaches the bet list, giving payouts and cash-out values); (2) place **one multi bet by hand** (teaches the multi-bet request, stored as `BetSlipFooter_SportBet#multi`); (3) **cash out one ₹1 bet by hand** (teaches the cash-out request). The Stake page lists which are learned.
+- Multi legs are treated as independent (legs always come from different matches).
 
 ### Next steps (in order)
-1. **Betting upgrades:** a confidence band per strategy (low/mid/high model probability); an **approval threshold**
-   that forces approval above an amount even in Auto (`STAKE_APPROVAL_ABOVE`); **estimated total payout** of open
-   bets; Stake **multi bets** (learn the multi-bet request from one manual multi with Learn mode on; a strategy kind
-   `multi` with 2–4 legs from different matches); **cash-out** (learn Stake's cash-out query and mutation from the
-   owner's My Bets page; show values; cash out on the owner's click).
+1. Verify the betting upgrades once the three Learn-mode captures exist (bet-list fields, multi request, cash-out request); adjust `parse_sport_bets` and `build_cashout_variables` to Stake's real field names if needed.
 2. **ML training system:** a `training_runs` table with live progress (epoch, loss, validation metrics) and a
    **Training** page; GPU via PyTorch CUDA and LightGBM/XGBoost GPU. Gradient-boosted trees + a neural net on
    point-in-time features (ratings, form, schedule, **player availability/impact**); no odds as inputs. Walk-forward
@@ -100,7 +99,7 @@ Python 3.12 (`.venv`), FastAPI + uvicorn, SQLAlchemy 2 (async with asyncpg; psyc
 4. For Stake: Chrome with the **SportsAnalyzer Stake Helper** extension loaded from `extension/` and a logged-in stake.com tab.
 
 ### Dashboard pages
-Overview (strategy controls: on/off, paper/approve/auto, reinvest %) · Bet ledger · Matches (model probabilities vs prices) · Stake (helper, balance, switches, approvals, outcomes) · Models (backtest metrics, calibration, simulated bets) · Data sources · Scraper (runs, live log, items) · Identity review. Pages marked P2–P4 in the sidebar are not built yet.
+Overview (In-play payout card; strategy controls: on/off, paper/approve/auto, reinvest %, settings incl. confidence band and multi legs) · Bet ledger · Matches (model probabilities vs prices) · Stake (helper, balance, switches, learned requests, approvals, Your Stake bets + cash-out, outcomes) · Models (backtest metrics, calibration, simulated bets) · Data sources · Scraper (runs, live log, items) · Identity review. Pages marked P2–P4 in the sidebar are not built yet.
 
 ---
 

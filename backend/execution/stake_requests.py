@@ -53,8 +53,13 @@ class TemplateError(ValueError):
     pass
 
 
-def build_bet_variables(sample: dict[str, Any], outcome_id: str, amount: float, currency: str) -> dict[str, Any]:
-    """Replace the bet-specific fields in a captured variables object; keep everything else."""
+def build_bet_variables(sample: dict[str, Any], outcome_id: str | list[str], amount: float,
+                        currency: str) -> dict[str, Any]:
+    """Replace the bet-specific fields in a captured variables object; keep everything else.
+
+    `outcome_id` may be a list (a multi bet: every leg must win).
+    """
+    outcome_ids = list(outcome_id) if isinstance(outcome_id, list | tuple) else [outcome_id]
     variables = copy.deepcopy(sample)
     replaced: set[str] = set()
 
@@ -62,10 +67,12 @@ def build_bet_variables(sample: dict[str, Any], outcome_id: str, amount: float, 
         if isinstance(node, dict):
             for key, value in list(node.items()):
                 if _OUTCOME_LIST.search(key) and isinstance(value, list):
-                    node[key] = [outcome_id]
+                    node[key] = outcome_ids
                     replaced.add("outcome")
                 elif _OUTCOME_ONE.search(key):
-                    node[key] = outcome_id
+                    if len(outcome_ids) > 1:
+                        raise TemplateError("This bet request takes one outcome; learn a multi bet first.")
+                    node[key] = outcome_ids[0]
                     replaced.add("outcome")
                 elif _AMOUNT.search(key) and isinstance(value, int | float):
                     node[key] = amount
@@ -91,7 +98,7 @@ def build_bet_variables(sample: dict[str, Any], outcome_id: str, amount: float, 
     return variables
 
 
-def build_bet_request(operation_name: str, query: str, sample: dict[str, Any], outcome_id: str,
+def build_bet_request(operation_name: str, query: str, sample: dict[str, Any], outcome_id: str | list[str],
                       amount: float, currency: str) -> dict[str, Any]:
     return {"operationName": operation_name, "query": query,
             "variables": build_bet_variables(sample, outcome_id, amount, currency)}
@@ -140,3 +147,88 @@ def bet_result(response: dict[str, Any]) -> tuple[bool, str | None, str]:
         if isinstance(value, dict) and value.get("id"):
             return True, str(value["id"]), "Placed"
     return False, None, "Stake did not return a bet id"
+
+
+# ----------------------------------------------------------------------------- multis and cash-out
+
+MULTI_SUFFIX = "#multi"
+
+
+def template_name(operation_name: str, kind: str, variables: dict[str, Any]) -> str:
+    """Store multi-bet captures separately from single-bet captures of the same mutation."""
+    ids = variables.get("outcomeIds") if isinstance(variables, dict) else None
+    if is_bet_mutation(operation_name, kind) and isinstance(ids, list) and len(ids) > 1:
+        return operation_name + MULTI_SUFFIX
+    return operation_name
+
+
+def is_cashout_mutation(operation_name: str, kind: str) -> bool:
+    return kind == "mutation" and "cashout" in operation_name.lower()
+
+
+_BET_ID = re.compile(r"^betId$|^id$|^iid$", re.I)
+_MULTIPLIER = re.compile(r"multiplier", re.I)
+
+
+def build_cashout_variables(sample: dict[str, Any], bet_id: str, multiplier: float | None) -> dict[str, Any]:
+    variables = copy.deepcopy(sample)
+    found = False
+    for key, value in list(variables.items()):
+        if _BET_ID.search(key) and isinstance(value, str):
+            variables[key] = bet_id
+            found = True
+        elif _MULTIPLIER.search(key) and isinstance(value, int | float) and multiplier is not None:
+            variables[key] = multiplier
+    if not found:
+        raise TemplateError("The learned cash-out request has no bet id field; cash out one bet by hand "
+                            "with Learn mode on.")
+    return variables
+
+
+def _num(value: Any) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def parse_sport_bets(payload: Any) -> list[dict[str, Any]]:
+    """Sports bets (singles and multis) from a Stake "My Bets" response, wherever they sit."""
+    bets: dict[str, dict[str, Any]] = {}
+
+    def describe(node: dict[str, Any]) -> str:
+        parts = []
+        for leg in node.get("outcomes") or []:
+            if not isinstance(leg, dict):
+                continue
+            outcome = leg.get("outcome") if isinstance(leg.get("outcome"), dict) else leg
+            fixture = leg.get("fixture") if isinstance(leg.get("fixture"), dict) else {}
+            name = outcome.get("name") if isinstance(outcome, dict) else None
+            parts.append(" · ".join(p for p in (fixture.get("name"), name) if p))
+        return " + ".join(p for p in parts if p)[:500]
+
+    def walk(node: Any) -> None:
+        if isinstance(node, list):
+            for value in node:
+                walk(value)
+            return
+        if not isinstance(node, dict):
+            return
+        kind = str(node.get("__typename") or "")
+        if kind in ("SportBet", "SwishBet") and node.get("id"):
+            bets[str(node["id"])] = {
+                "id": str(node["id"]), "status": node.get("status"), "active": node.get("active"),
+                "amount": _num(node.get("amount")), "currency": node.get("currency"),
+                "potential_multiplier": _num(node.get("potentialMultiplier") or node.get("payoutMultiplier")),
+                "payout": _num(node.get("payout")),
+                "cashout_multiplier": _num(node.get("cashoutMultiplier")),
+                "cashout_disabled": node.get("cashoutDisabled"),
+                "description": describe(node) or None,
+                "placed_at": node.get("createdAt"),
+                "raw": node,
+            }
+        for value in node.values():
+            walk(value)
+
+    walk(payload)
+    return list(bets.values())

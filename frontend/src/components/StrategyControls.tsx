@@ -61,7 +61,8 @@ function StrategyRowView({ s }: { s: StrategyRow }) {
         <div className="min-w-0 flex-1">
           <div className="font-medium">{s.name}</div>
           <div className="text-xs text-zinc-500 dark:text-zinc-400">
-            {s.kind === 'kelly' ? `${s.kelly_fraction}× Kelly` : `${s.stake_pct}% of pot per bet`} · min edge {Math.round(s.min_edge * 100)}%
+            {s.kind === 'kelly' ? `${s.kelly_fraction}× Kelly` : s.kind === 'multi' ? `${s.multi_legs}-leg multi · ${s.stake_pct}% of pot` : `${s.stake_pct}% of pot per bet`}
+            {' '}· chances {Math.round(s.min_prob * 100)}–{Math.round(s.max_prob * 100)}% · min edge {Math.round(s.min_edge * 100)}%
             · {s.markets.join(', ')} · max {s.max_bets_per_day}/day · stop at −{s.drawdown_stop_pct}%
           </div>
         </div>
@@ -97,6 +98,11 @@ function StrategyRowView({ s }: { s: StrategyRow }) {
         </dl>
       </div>
 
+      <details className="mt-3 text-sm">
+        <summary className="cursor-pointer text-xs text-zinc-500 hover:text-zinc-800 dark:text-zinc-400 dark:hover:text-zinc-200">Settings</summary>
+        <StrategySettings s={s} onSave={(body) => update.mutate(body)} />
+      </details>
+
       {s.paused_reason && (
         <div className="mt-3 flex items-center gap-2 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:bg-amber-950 dark:text-amber-200">
           {s.paused_reason}
@@ -107,6 +113,60 @@ function StrategyRowView({ s }: { s: StrategyRow }) {
       )}
       {update.error && <p className="mt-2 text-xs text-rose-600">{(update.error as Error).message}</p>}
     </li>
+  )
+}
+
+function NumberField({ label, value, step, onSave, suffix }: {
+  label: string; value: number; step: number; onSave: (v: number) => void; suffix?: string
+}) {
+  const [local, setLocal] = useState(String(value))
+  useEffect(() => setLocal(String(value)), [value])
+  return (
+    <label className="block">
+      <span className="text-xs text-zinc-500 dark:text-zinc-400">{label}</span>
+      <div className="mt-0.5 flex items-center gap-1">
+        <input type="number" step={step} value={local} onChange={(e) => setLocal(e.target.value)}
+          onBlur={() => { const v = Number(local); if (!Number.isNaN(v) && v !== value) onSave(v) }}
+          className="tabular w-20 rounded-md border border-zinc-200 bg-transparent px-2 py-1 text-sm dark:border-zinc-800" />
+        {suffix && <span className="text-xs text-zinc-500">{suffix}</span>}
+      </div>
+    </label>
+  )
+}
+
+const MARKET_LABEL: Record<string, string> = { '1x2': 'Home/Draw/Away', ou25: 'Over/Under 2.5', btts: 'Both teams score' }
+
+function StrategySettings({ s, onSave }: { s: StrategyRow; onSave: (body: Partial<StrategyRow>) => void }) {
+  const pct = (v: number) => Math.round(v * 1000) / 10
+  return (
+    <div className="mt-2 grid grid-cols-2 gap-3 rounded-lg bg-zinc-50 p-3 sm:grid-cols-4 dark:bg-zinc-900/60">
+      <NumberField label="Min chance" value={pct(s.min_prob)} step={5} suffix="%" onSave={(v) => onSave({ min_prob: v / 100 })} />
+      <NumberField label="Max chance" value={pct(s.max_prob)} step={5} suffix="%" onSave={(v) => onSave({ max_prob: v / 100 })} />
+      <NumberField label="Min edge" value={pct(s.min_edge)} step={1} suffix="%" onSave={(v) => onSave({ min_edge: v / 100 })} />
+      {s.kind === 'kelly'
+        ? <NumberField label="Kelly fraction" value={s.kelly_fraction} step={0.05} onSave={(v) => onSave({ kelly_fraction: v })} />
+        : <NumberField label="Stake per bet" value={s.stake_pct} step={0.5} suffix="% of pot" onSave={(v) => onSave({ stake_pct: v })} />}
+      <NumberField label="Max stake" value={s.max_stake} step={1} suffix="₹" onSave={(v) => onSave({ max_stake: v })} />
+      <NumberField label="Bets per day" value={s.max_bets_per_day} step={1} onSave={(v) => onSave({ max_bets_per_day: v })} />
+      <NumberField label="Drawdown stop" value={s.drawdown_stop_pct} step={5} suffix="%" onSave={(v) => onSave({ drawdown_stop_pct: v })} />
+      {s.kind === 'multi' && <NumberField label="Legs" value={s.multi_legs} step={1} onSave={(v) => onSave({ multi_legs: v })} />}
+      <NumberField label="Starting bankroll" value={s.bankroll_start} step={50} suffix="₹" onSave={(v) => onSave({ bankroll_start: v })} />
+      <div className="col-span-2 sm:col-span-4">
+        <span className="text-xs text-zinc-500 dark:text-zinc-400">Markets</span>
+        <div className="mt-1 flex flex-wrap gap-3">
+          {Object.entries(MARKET_LABEL).map(([key, label]) => (
+            <label key={key} className="flex items-center gap-1.5 text-xs">
+              <input type="checkbox" checked={s.markets.includes(key)}
+                onChange={(e) => {
+                  const next = e.target.checked ? [...s.markets, key] : s.markets.filter((m) => m !== key)
+                  if (next.length) onSave({ markets: next })
+                }} />
+              {label}
+            </label>
+          ))}
+        </div>
+      </div>
+    </div>
   )
 }
 

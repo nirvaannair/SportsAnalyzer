@@ -39,7 +39,9 @@ from backend.strategies.core import (
     Candidate,
     bankroll,
     best_per_market,
+    build_multi,
     eligible,
+    multi_result,
     settle_profit,
     stake_size,
     won,
@@ -126,6 +128,15 @@ async def settle(session: AsyncSession) -> int:
             bet.status, bet.profit, bet.settled_at = "void", 0.0, now
             settled += 1
             continue
+        if bet.market == "multi":
+            is_win = await _multi_outcome(session, bet)
+            if is_win is None:
+                continue
+            bet.status = "won" if is_win else "lost"
+            bet.profit = settle_profit(bet.stake, bet.price, is_win)
+            bet.settled_at = now
+            settled += 1
+            continue
         if match.status != "finished" or match.home_goals is None or match.away_goals is None:
             continue
         is_win = won(bet.market, bet.selection, match.home_goals, match.away_goals)
@@ -135,6 +146,17 @@ async def settle(session: AsyncSession) -> int:
         settled += 1
     await session.flush()
     return settled
+
+
+async def _multi_outcome(session: AsyncSession, bet: StrategyBet) -> bool | None:
+    results = []
+    for leg in bet.legs or []:
+        match = await session.get(Match, leg["match_id"])
+        if match is None or match.status != "finished" or match.home_goals is None or match.away_goals is None:
+            results.append(None)
+        else:
+            results.append(won(leg["market"], leg["selection"], match.home_goals, match.away_goals))
+    return multi_result(results)
 
 
 async def strategy_bankroll(session: AsyncSession, strategy: Strategy):
@@ -182,9 +204,15 @@ async def generate(session: AsyncSession, strategy: Strategy) -> dict[str, Any]:
             else:
                 continue
             c = Candidate(pred["match_id"], market, selection, float(p), price, source, outcome_id)
-            if eligible(c, min_edge=strategy.min_edge, min_price=strategy.min_price, max_price=strategy.max_price,
-                        markets=strategy.markets, real_money=real):
+            # Multis judge value on the combined bet; each leg just has to be fair value or better.
+            leg_edge = 0.0 if strategy.kind == "multi" else strategy.min_edge
+            if eligible(c, min_edge=leg_edge, min_price=strategy.min_price, max_price=strategy.max_price,
+                        markets=strategy.markets, real_money=real,
+                        min_prob=strategy.min_prob, max_prob=strategy.max_prob):
                 candidates.append(c)
+
+    if strategy.kind == "multi":
+        return await _generate_multi(session, strategy, candidates, bank.available, today_count, real, limits)
 
     created, notes = 0, []
     available = bank.available
@@ -215,6 +243,39 @@ async def generate(session: AsyncSession, strategy: Strategy) -> dict[str, Any]:
         created += 1
     await session.flush()
     return {"created": created, "candidates": len(candidates), "notes": notes}
+
+
+async def _generate_multi(session: AsyncSession, strategy: Strategy, candidates: list[Candidate],
+                          available: float, today_count: int, real: bool, limits: Limits) -> dict[str, Any]:
+    if today_count >= strategy.max_bets_per_day:
+        return {"created": 0, "candidates": len(candidates), "notes": ["daily limit reached"]}
+    multi = build_multi(best_per_market(candidates), strategy.multi_legs, min_edge=strategy.min_edge)
+    if multi is None:
+        return {"created": 0, "candidates": len(candidates),
+                "notes": [f"no {strategy.multi_legs}-leg combination with {strategy.min_edge:.0%} value"]}
+    cap = min(strategy.max_stake, limits.max_bet) if real else strategy.max_stake
+    stake = stake_size("flat", available, multi.p, multi.price, stake_pct=strategy.stake_pct,
+                       kelly_fraction=strategy.kelly_fraction, max_stake=cap)
+    if stake <= 0:
+        return {"created": 0, "candidates": len(candidates), "notes": ["stake below the ₹1 minimum"]}
+    legs = [{"match_id": c.match_id, "market": c.market, "selection": c.selection, "p": round(c.p, 4),
+             "price": c.price, "outcome_id": c.outcome_id, "price_source": c.price_source} for c in multi.legs]
+    bet = StrategyBet(strategy_id=strategy.id, match_id=multi.legs[0].match_id, market="multi",
+                      selection=f"{len(legs)} legs", mode=strategy.mode, p_model=multi.p, price=multi.price,
+                      price_source="stake" if all(c.price_source == "stake" for c in multi.legs) else "mixed",
+                      edge=round(multi.edge, 4), stake=stake, legs=legs)
+    if real:
+        outcomes = [(await session.execute(select(StakeOutcome).where(
+            StakeOutcome.outcome_id == c.outcome_id))).scalar_one() for c in multi.legs]
+        try:
+            order = await create_stake_order(session, outcomes, stake, source=f"strategy:{strategy.name}",
+                                             auto_approve=strategy.mode == "auto", match_id=multi.legs[0].match_id)
+        except GuardrailError as exc:
+            return {"created": 0, "candidates": len(candidates), "notes": [str(exc)]}
+        bet.stake_order_id = order.id
+    session.add(bet)
+    await session.flush()
+    return {"created": 1, "candidates": len(candidates), "notes": []}
 
 
 async def apply_drawdown_stop(session: AsyncSession, strategy: Strategy) -> bool:

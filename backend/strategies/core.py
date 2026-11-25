@@ -98,8 +98,11 @@ def best_per_market(candidates: Iterable[Candidate]) -> list[Candidate]:
 
 
 def eligible(c: Candidate, *, min_edge: float, min_price: float, max_price: float,
-             markets: Iterable[str], real_money: bool) -> bool:
+             markets: Iterable[str], real_money: bool, min_prob: float = 0.0, max_prob: float = 1.0) -> bool:
+    """Value check plus the strategy's confidence band (e.g. only 20-60% outcomes)."""
     if c.market not in set(markets):
+        return False
+    if not (min_prob <= c.p <= max_prob):
         return False
     if not (min_price <= c.price <= max_price):
         return False
@@ -121,3 +124,57 @@ def won(market: str, selection: str, home_goals: int, away_goals: int) -> bool:
 
 def settle_profit(stake: float, price: float, is_win: bool) -> float:
     return round(stake * (price - 1), 2) if is_win else -stake
+
+
+@dataclass(frozen=True)
+class Multi:
+    legs: tuple[Candidate, ...]
+
+    @property
+    def p(self) -> float:
+        result = 1.0
+        for leg in self.legs:
+            result *= leg.p
+        return result
+
+    @property
+    def price(self) -> float:
+        result = 1.0
+        for leg in self.legs:
+            result *= leg.price
+        return round(result, 3)
+
+    @property
+    def edge(self) -> float:
+        return self.p * self.price - 1
+
+
+def build_multi(candidates: Iterable[Candidate], legs: int, *, min_leg_edge: float = 0.0,
+                min_edge: float = 0.0) -> Multi | None:
+    """Best `legs` selections from different matches, each with positive value; None if not worth it.
+
+    Legs from different matches are treated as independent (no same-match combinations).
+    """
+    chosen: list[Candidate] = []
+    used: set[int] = set()
+    for c in sorted(candidates, key=lambda c: c.edge, reverse=True):
+        if c.match_id in used or c.edge < min_leg_edge:
+            continue
+        chosen.append(c)
+        used.add(c.match_id)
+        if len(chosen) == legs:
+            break
+    if len(chosen) < max(2, legs):
+        return None
+    multi = Multi(tuple(chosen))
+    return multi if multi.edge >= min_edge else None
+
+
+def multi_result(leg_results: Iterable[bool | None]) -> bool | None:
+    """Won only if every leg won; lost as soon as any leg lost; None while undecided."""
+    results = list(leg_results)
+    if any(r is False for r in results):
+        return False
+    if all(r is True for r in results):
+        return True
+    return None

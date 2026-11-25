@@ -42,10 +42,11 @@
         return;
       }
       stats.captured += 1;
+      const named = op.operationName || ((op.query.match(/^\s*(?:query|mutation|subscription)\s+([A-Za-z_]\w*)/) || [])[1]) || null;
       window.postMessage({
         [MARK]: 'captured',
-        operation: { operationName: op.operationName, query: op.query, variables: op.variables || {} },
-        response: { operationName: op.operationName, data: (results[i] || {}).data || null },
+        operation: { operationName: named, query: op.query, variables: op.variables || {} },
+        response: { operationName: named, data: (results[i] || {}).data || null },
       }, window.location.origin);
     });
   }

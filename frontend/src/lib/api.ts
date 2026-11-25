@@ -129,12 +129,15 @@ export type StakeStatus = {
             error?: string | null; hook?: { fetchSeen: number; xhrSeen: number; captured: number; unreadable: number } | null; balances?: { available: Record<string, number>; vault: Record<string, number> } | null }
   execution_enabled: boolean
   learn_mode: boolean
-  limits: { max_bet: number; budget: number; max_bets_per_day: number; currency: string }
+  limits: { max_bet: number; budget: number; max_bets_per_day: number; currency: string; approval_above: number }
   spent_total: number
   bets_today: number
   budget_left: number
   bet_request_learned: boolean
   bet_operation: string | null
+  multi_request_learned: boolean
+  cashout_request_learned: boolean
+  bet_list_learned: boolean
   orders_by_status: Record<string, number>
 }
 export type StakeOutcome = { outcome_id: string; fixture: string | null; market: string | null; name: string;
@@ -148,9 +151,10 @@ export type StakeOrder = {
 }
 
 export type StrategyRow = {
-  id: number; name: string; kind: 'flat' | 'kelly'; mode: 'paper' | 'approve' | 'auto'; enabled: boolean
+  id: number; name: string; kind: 'flat' | 'kelly' | 'multi'; mode: 'paper' | 'approve' | 'auto'; enabled: boolean
   paused_reason: string | null; model: string; bankroll_start: number; reinvest_pct: number; stake_pct: number
   kelly_fraction: number; max_stake: number; min_edge: number; min_price: number; max_price: number
+  min_prob: number; max_prob: number; multi_legs: number
   markets: string[]; leagues: string[]; max_bets_per_day: number; drawdown_stop_pct: number
   bankroll: { pot: number; available: number; banked: number; open_stakes: number; profit: number;
               drawdown_pct: number; roi: number | null }
@@ -161,7 +165,16 @@ export type LedgerBet = {
   market: string; selection: string; mode: string; p_model: number; price: number; price_source: string
   edge: number; stake: number; status: string; profit: number | null; order_status: string | null
   created_at: string; settled_at: string | null
+  legs: { match_id: number; market: string; selection: string; p: number; price: number }[] | null
 }
+export type Exposure = {
+  real: { bets: number; stake: number; potential_payout: number; cashout_value: number }
+  pending_orders: { count: number; stake: number; potential_payout: number }
+  paper: { bets: number; stake: number; potential_payout: number }
+}
+export type StakeBetRow = { id: string; status: string | null; open: boolean; amount: number; currency: string | null
+  description: string | null; placed_at: string | null; potential_payout: number | null; cashout_value: number | null
+  cashout_available: boolean }
 export type Automation = {
   started_at?: string; next_cycle_at?: string
   last_cycle?: { at: string; settled: number; strategies: Record<string, { created?: number; skipped?: string }> }
@@ -223,6 +236,9 @@ export const api = {
   stakeApprove: (id: number) => post(`/api/stake/orders/${id}/approve`),
   stakeReject: (id: number) => post(`/api/stake/orders/${id}/reject`),
   strategies: () => request<StrategyRow[]>('/api/strategies'),
+  exposure: () => request<Exposure>('/api/stake/exposure'),
+  stakeBets: () => request<StakeBetRow[]>('/api/stake/bets'),
+  cashout: (id: string) => post(`/api/stake/bets/${encodeURIComponent(id)}/cashout`),
   updateStrategy: (id: number, body: Partial<StrategyRow> & { resume?: boolean; confirm_real_money?: boolean }) =>
     patch<StrategyRow>(`/api/strategies/${id}`, body),
   runStrategies: () => post('/api/strategies/run'),

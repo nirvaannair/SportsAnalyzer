@@ -518,7 +518,11 @@ class StakeOrder(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
-    source: Mapped[str] = mapped_column(String(32), nullable=False)  # manual_test | strategy:<name>
+    source: Mapped[str] = mapped_column(String(120), nullable=False)  # manual_test | strategy:<name> | cashout
+    kind: Mapped[str] = mapped_column(String(16), nullable=False, server_default="bet")  # bet | multi | cashout
+    outcome_ids: Mapped[list[str] | None] = mapped_column(JSONB)  # multi legs
+    target_bet_id: Mapped[str | None] = mapped_column(String(128))  # cash-out: which Stake bet
+    price_at_creation: Mapped[float | None] = mapped_column(Float)
     match_id: Mapped[int | None] = mapped_column(ForeignKey("matches.id"))
     outcome_id: Mapped[str] = mapped_column(String(128), nullable=False)
     description: Mapped[str] = mapped_column(String(300), nullable=False)
@@ -591,6 +595,9 @@ class Strategy(Base):
     min_edge: Mapped[float] = mapped_column(Float, nullable=False, server_default="0.05")
     min_price: Mapped[float] = mapped_column(Float, nullable=False, server_default="1.3")
     max_price: Mapped[float] = mapped_column(Float, nullable=False, server_default="6")
+    min_prob: Mapped[float] = mapped_column(Float, nullable=False, server_default="0")  # confidence band
+    max_prob: Mapped[float] = mapped_column(Float, nullable=False, server_default="1")
+    multi_legs: Mapped[int] = mapped_column(Integer, nullable=False, server_default="3")  # for kind="multi"
     markets: Mapped[list[str]] = mapped_column(JSONB, nullable=False, server_default='["1x2"]')
     leagues: Mapped[list[str]] = mapped_column(JSONB, nullable=False, server_default="[]")  # [] = all
     max_bets_per_day: Mapped[int] = mapped_column(Integer, nullable=False, server_default="5")
@@ -619,6 +626,7 @@ class StrategyBet(Base):
     status: Mapped[str] = mapped_column(String(16), nullable=False, server_default="open")  # open won lost void
     profit: Mapped[float | None] = mapped_column(Float)
     stake_order_id: Mapped[int | None] = mapped_column(ForeignKey("stake_orders.id", ondelete="SET NULL"))
+    legs: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONB)  # multi bets: one entry per selection
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
@@ -627,4 +635,29 @@ class StrategyBet(Base):
     __table_args__ = (
         UniqueConstraint("strategy_id", "match_id", "market", name="uq_strategy_bets_one_per_market"),
         Index("ix_strategy_bets_status", "status", "match_id"),
+    )
+
+
+class StakeBet(Base):
+    """A bet as it exists on Stake right now (read by the helper from your My Bets list).
+
+    Gives the real stake, potential payout, status and current cash-out value.
+    """
+
+    __tablename__ = "stake_bets"
+
+    id: Mapped[str] = mapped_column(String(128), primary_key=True)  # Stake bet id
+    status: Mapped[str | None] = mapped_column(String(32))
+    active: Mapped[bool | None] = mapped_column(Boolean)
+    amount: Mapped[float | None] = mapped_column(Float)
+    currency: Mapped[str | None] = mapped_column(String(8))
+    potential_multiplier: Mapped[float | None] = mapped_column(Float)
+    payout: Mapped[float | None] = mapped_column(Float)
+    cashout_multiplier: Mapped[float | None] = mapped_column(Float)
+    cashout_disabled: Mapped[bool | None] = mapped_column(Boolean)
+    description: Mapped[str | None] = mapped_column(Text)
+    placed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    raw: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
     )
