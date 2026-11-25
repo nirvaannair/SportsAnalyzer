@@ -64,10 +64,25 @@
   window.fetch = function (input, init) {
     const url = urlOf(input);
     const graphql = isGraphql(url);
-    const pendingBody = graphql && learning ? bodyText(input, init).catch(() => null) : null;
+    const pendingBody = graphql ? bodyText(input, init).catch(() => null) : null;
     const promise = originalFetch.apply(this, arguments);
     if (graphql) {
       stats.fetchSeen += 1;
+      // Always (not only in Learn mode): tell the helper how Stake answered a cash-out, so a
+      // cash-out you requested from the dashboard can be confirmed with Stake's exact payout.
+      promise.then(async (response) => {
+        try {
+          const text = await pendingBody;
+          if (text && text.includes('cashoutSportBet')) {
+            const data = await response.clone().json();
+            window.postMessage({ [MARK]: 'cashout_result', data }, window.location.origin);
+          }
+        } catch (_) {
+          // ignore
+        }
+      }, () => {});
+    }
+    if (graphql && learning) {
       if (pendingBody) {
         promise.then(async (response) => {
           try {

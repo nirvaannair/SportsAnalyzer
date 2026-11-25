@@ -85,3 +85,23 @@ def test_empty_identifier_is_kept() -> None:
     sample = {"amount": 1, "currency": "inr", "outcomeIds": ["a", "b"], "identifier": "", "idempotencyKey": "k"}
     v = build_bet_request("X", "mutation X { y }", sample, ["c", "d"], 1.0, "inr")["variables"]
     assert v["identifier"] == "" and v["idempotencyKey"] != "k"
+
+
+def _leg(odds_at_bet, current, market_status="active", active=True, status="pending"):
+    return {"odds": odds_at_bet, "status": status, "market": {"name": "1x2", "status": market_status},
+            "outcome": {"name": "X", "active": active, "odds": current}, "fixture": {"name": "A - B", "cashoutEnabled": True}}
+
+
+def test_cashout_view_matches_stakes_screen() -> None:
+    from backend.execution.stake_requests import cashout_view
+
+    # The owner's 3-leg multi: Stake showed ₹0.91 on ₹1
+    raw = {"potentialMultiplier": 8.474614, "cashoutDisabled": False,
+           "outcomes": [_leg(2.14, 2.14), _leg(1.99, 1.95), _leg(1.99, 1.99)]}
+    view = cashout_view(raw)
+    assert view["available"] and view["estimate_multiplier"] == pytest.approx(0.91, abs=0.01)
+    # A suspended market (live play) makes cash-out unavailable, as on Stake
+    suspended = {**raw, "outcomes": [_leg(1.75, 1.55, market_status="deactivated")]}
+    view = cashout_view(suspended)
+    assert not view["available"] and "suspended" in view["reason"]
+    assert cashout_view({**raw, "cashoutDisabled": True})["available"] is False

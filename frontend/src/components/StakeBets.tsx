@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Ticket } from 'lucide-react'
 import { api } from '../lib/api'
 import { Card, CardHeader, EmptyState } from './ui'
@@ -7,7 +7,12 @@ const rupees = (v: number) => `₹${v.toLocaleString('en-IN', { maximumFractionD
 
 /** Your open bets as Stake reports them: legs, potential payout, and cash-out availability. */
 export default function StakeBets({ listLearned }: { listLearned: boolean }) {
+  const queryClient = useQueryClient()
   const bets = useQuery({ queryKey: ['stake', 'bets'], queryFn: api.stakeBets, refetchInterval: 15000 })
+  const cashout = useMutation({
+    mutationFn: (id: string) => api.cashout(id),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['stake'] }),
+  })
   const rows = bets.data ?? []
 
   return (
@@ -47,6 +52,20 @@ export default function StakeBets({ listLearned }: { listLearned: boolean }) {
                   <>
                     <div className="tabular font-medium">≈ {b.cashout_estimate == null ? '—' : rupees(b.cashout_estimate)}</div>
                     <div className="text-xs text-zinc-500">cash-out estimate</div>
+                    <button
+                      disabled={cashout.isPending}
+                      onClick={() => {
+                        const msg = `Cash out "${b.title}"?
+
+The helper opens this bet in your Stake tab and presses Stake's own ` +
+                          `Cashout button, so you get Stake's exact amount at that moment` +
+                          (b.cashout_estimate == null ? '.' : ` (estimate ≈ ${rupees(b.cashout_estimate)}).`)
+                        if (window.confirm(msg)) cashout.mutate(b.id)
+                      }}
+                      className="mt-1.5 rounded-md border border-zinc-200 px-2.5 py-1 text-xs font-medium hover:bg-zinc-50 disabled:opacity-40 dark:border-zinc-800 dark:hover:bg-zinc-800"
+                    >
+                      Cash out
+                    </button>
                   </>
                 ) : (
                   <>
@@ -59,9 +78,11 @@ export default function StakeBets({ listLearned }: { listLearned: boolean }) {
           ))}
         </ul>
       )}
+      {cashout.error && <p className="px-5 pb-3 text-sm text-rose-600">{(cashout.error as Error).message}</p>}
       <p className="border-t border-zinc-100 px-5 py-2.5 text-xs text-zinc-500 dark:border-zinc-800 dark:text-zinc-400">
-        Stake calculates the exact cash-out amount live on its own page; the figure here is an estimate. To cash out, use
-        the Cashout button in Stake's My Bets.
+        The figure here is an estimate; Stake calculates the exact amount live on its own page. Cash out opens the bet in
+        your Stake tab and presses Stake's own Cashout button, so the exact amount is always Stake's. The result appears
+        under Bets.
       </p>
     </Card>
   )

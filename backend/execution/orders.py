@@ -18,7 +18,6 @@ from backend.execution.stake_requests import (
     MULTI_SUFFIX,
     TemplateError,
     build_bet_request,
-    build_cashout_variables,
     is_bet_mutation,
     is_cashout_mutation,
 )
@@ -90,18 +89,27 @@ async def create_stake_order(session: AsyncSession, outcomes: StakeOutcome | lis
     return order
 
 
-async def create_cashout_order(session: AsyncSession, bet: StakeBet) -> StakeOrder:
-    """Cash out one Stake bet at its current value. Created only by the owner's click."""
-    op = await cashout_operation(session)
-    if op is None:
-        raise TemplateError("Cash-out hasn't been learned yet: cash out one bet by hand on Stake with Learn mode on.")
-    variables = build_cashout_variables(op.sample_variables, bet.id, bet.cashout_multiplier)
-    value = round((bet.amount or 0) * (bet.cashout_multiplier or 0), 2)
+def bet_iid(bet: StakeBet) -> str | None:
+    """Stake's public id for a bet (e.g. "sport:699002822"), used in its bet-page link."""
+    inner = (bet.raw or {}).get("bet") or {}
+    return inner.get("iid") if isinstance(inner, dict) else None
+
+
+async def create_cashout_order(session: AsyncSession, bet: StakeBet, title: str, estimate: float | None) -> StakeOrder:
+    """Cash out one Stake bet. Created only by the owner's click.
+
+    The helper opens the bet's page in the owner's Stake tab and presses Stake's own Cashout
+    button, so the amount is always Stake's exact live value (never a value we computed).
+    """
+    iid = bet_iid(bet)
+    if not iid:
+        raise TemplateError("This bet has no Stake page id yet; wait for the next My Bets refresh.")
     order = StakeOrder(
         source="cashout", kind="cashout", target_bet_id=bet.id, outcome_id="-",
-        description=f"Cash out: {bet.description or bet.id} (about ₹{value:g})"[:300],
+        description=f"Cash out: {title}" + (f" (estimate ≈ ₹{estimate:g})" if estimate is not None else ""),
         amount=0.0, currency=bet.currency or "inr", status="approved", approved_at=datetime.now(UTC),
-        status_detail="Cash-out requested by you", request_preview=variables,
+        status_detail="Cash-out requested by you",
+        request_preview={"iid": iid, "bet_id": bet.id, "stake": bet.amount, "estimate": estimate},
     )
     session.add(order)
     await session.flush()

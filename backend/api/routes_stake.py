@@ -51,7 +51,6 @@ from backend.execution.stake_requests import (
     TemplateError,
     bet_result,
     build_bet_request,
-    build_cashout_variables,
     cashout_view,
     describe_operation,
     is_bet_mutation,
@@ -356,19 +355,13 @@ async def next_order() -> dict[str, Any]:
         enabled = bool(await _get(session, "stake_execution_enabled", False))
         if order.kind == "cashout":
             # Your own click; it only takes money off the table, so it doesn't wait for Execution.
-            op = await cashout_operation(session)
-            bet = await session.get(StakeBet, order.target_bet_id) if order.target_bet_id else None
-            if op is None or bet is None:
-                order.status, order.finished_at = "blocked", datetime.now(UTC)
-                order.status_detail = "Cash-out request not learned yet" if op is None else "Bet not found"
-                await session.commit()
-                return {"order": None, "reason": order.status_detail}
-            request = {"operationName": op.operation_name, "query": op.query,
-                       "variables": build_cashout_variables(op.sample_variables, bet.id, bet.cashout_multiplier)}
-            order.status, order.sent_at, order.request_preview = "sent", datetime.now(UTC), request["variables"]
+            # The helper presses Stake's own Cashout button: Stake's exact value, Stake's own flow.
+            order.status, order.sent_at = "sent", datetime.now(UTC)
             await session.commit()
+            preview = order.request_preview or {}
             return {"order": {"id": order.id, "kind": "cashout", "description": order.description,
-                              "amount": 0, "currency": order.currency, "request": request}}
+                              "iid": preview.get("iid"), "bet_id": preview.get("bet_id"),
+                              "estimate": preview.get("estimate")}}
 
         op = await bet_operation(session, multi=order.kind == "multi")
         if op is None or not enabled:
@@ -404,8 +397,16 @@ async def order_result(order_id: int, body: OrderResult) -> dict[str, Any]:
         response = _scrub(body.response or {})
         placed, bet_id, message = bet_result(response) if body.response else (False, None, body.error or "Error")
         if order.kind == "cashout":
-            ok = bool(body.response) and not (body.response or {}).get("errors")
-            order.status, order.status_detail = ("placed", "Cashed out") if ok else ("failed", message)
+            data = (body.response or {}).get("data") or {}
+            result = data.get("cashoutSportBet") if isinstance(data, dict) else None
+            ok = bool(result) and not (body.response or {}).get("errors")
+            if ok:
+                payout = result.get("payout")
+                order.status = "placed"
+                order.status_detail = f"Cashed out for ₹{payout:g}" if isinstance(payout, int | float) else "Cashed out"
+                order.placed_price = payout if isinstance(payout, int | float) else None
+            else:
+                order.status, order.status_detail = "failed", body.error or message
         else:
             order.status = "placed" if placed else "failed"
             order.stake_bet_id, order.status_detail = bet_id, message
@@ -471,19 +472,24 @@ async def stake_bets(open_only: bool = True) -> list[dict[str, Any]]:
 
 @router.post("/bets/{bet_id}/cashout")
 async def cashout(bet_id: str) -> dict[str, Any]:
-    # Paused: the cash-out request carries a multiplier chosen by the caller, and Stake only
-    # computes the exact live value inside its own page. Sending an estimate could pay out less
-    # than Stake's real offer, so dashboard cash-outs stay off until they can use Stake's value.
-    raise HTTPException(409, "Cash-out from the dashboard is paused: Stake calculates the exact amount live on "
-                             "its own page. Use the Cashout button in Stake's My Bets for now.")
+    """Your click: the helper opens the bet on Stake and presses Stake's own Cashout button."""
     async with AsyncSessionFactory() as session:
         bet = await session.get(StakeBet, bet_id)
         if bet is None or not _is_open(bet):
             raise HTTPException(404, "No open Stake bet with that id")
-        if not bet.cashout_multiplier or bet.cashout_disabled:
-            raise HTTPException(409, "Stake isn't offering a cash-out on this bet right now")
+        view = cashout_view(bet.raw or {})
+        if not view["available"]:
+            raise HTTPException(409, f"Stake isn't offering a cash-out right now: {view['reason']}")
+        busy = (await session.execute(select(func.count()).select_from(StakeOrder).where(
+            StakeOrder.kind == "cashout", StakeOrder.target_bet_id == bet_id,
+            StakeOrder.status.in_(["approved", "sent"])))).scalar_one()
+        if busy:
+            raise HTTPException(409, "A cash-out for this bet is already in progress")
+        legs = view["legs"]
+        title = f"{len(legs)}-leg multi" if len(legs) > 1 else (legs[0]["selection"] if legs else bet.id)
+        estimate = round((bet.amount or 0) * view["estimate_multiplier"], 2) if view["estimate_multiplier"] else None
         try:
-            order = await create_cashout_order(session, bet)
+            order = await create_cashout_order(session, bet, title, estimate)
         except TemplateError as exc:
             raise HTTPException(409, str(exc)) from exc
         await session.commit()
