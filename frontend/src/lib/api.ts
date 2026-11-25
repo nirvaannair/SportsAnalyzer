@@ -129,12 +129,15 @@ export type StakeStatus = {
             error?: string | null; hook?: { fetchSeen: number; xhrSeen: number; captured: number; unreadable: number } | null; balances?: { available: Record<string, number>; vault: Record<string, number> } | null }
   execution_enabled: boolean
   learn_mode: boolean
-  limits: { max_bet: number; budget: number; max_bets_per_day: number; currency: string }
+  limits: { max_bet: number; budget: number; max_bets_per_day: number; currency: string; approval_above: number }
   spent_total: number
   bets_today: number
   budget_left: number
   bet_request_learned: boolean
   bet_operation: string | null
+  multi_request_learned: boolean
+  cashout_request_learned: boolean
+  bet_list_learned: boolean
   orders_by_status: Record<string, number>
 }
 export type StakeOutcome = { outcome_id: string; fixture: string | null; market: string | null; name: string;
@@ -147,6 +150,40 @@ export type StakeOrder = {
   approved_at: string | null; sent_at: string | null; finished_at: string | null
 }
 
+export type StrategyRow = {
+  id: number; name: string; kind: 'flat' | 'kelly' | 'multi'; mode: 'paper' | 'approve' | 'auto'; enabled: boolean
+  paused_reason: string | null; model: string; bankroll_start: number; reinvest_pct: number; stake_pct: number
+  kelly_fraction: number; max_stake: number; min_edge: number; min_price: number; max_price: number
+  min_prob: number; max_prob: number; multi_legs: number
+  markets: string[]; leagues: string[]; max_bets_per_day: number; drawdown_stop_pct: number
+  bankroll: { pot: number; available: number; banked: number; open_stakes: number; profit: number;
+              drawdown_pct: number; roi: number | null }
+  bets: Record<string, number>
+}
+export type LedgerBet = {
+  id: number; strategy: string; match: string; date: string; kickoff_at: string | null; score: string | null
+  market: string; selection: string; mode: string; p_model: number; price: number; price_source: string
+  edge: number; stake: number; status: string; profit: number | null; order_status: string | null
+  created_at: string; settled_at: string | null
+  legs: { match_id: number; market: string; selection: string; p: number; price: number }[] | null
+}
+export type Exposure = {
+  real: { bets: number; stake: number; potential_payout: number; cashout_value: number }
+  pending_orders: { count: number; stake: number; potential_payout: number }
+  paper: { bets: number; stake: number; potential_payout: number }
+}
+export type StakeBetLeg = { fixture: string | null; selection: string | null; market: string | null
+  odds_at_bet: number | null; current_odds: number | null; status: string | null; open: boolean }
+export type StakeBetRow = { id: string; status: string | null; open: boolean; amount: number; currency: string | null
+  title: string; legs: StakeBetLeg[]; placed_at: string | null; potential_payout: number | null
+  cashout_available: boolean; cashout_reason: string | null; cashout_estimate: number | null }
+export type Automation = {
+  started_at?: string; next_cycle_at?: string
+  last_cycle?: { at: string; settled: number; strategies: Record<string, { created?: number; skipped?: string }> }
+  last_refresh?: { at: string; fixtures: number; predicted: Record<string, number> }
+  last_error?: { at: string; error: string } | null
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, init)
   if (!response.ok) {
@@ -155,6 +192,13 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   }
   return response.json() as Promise<T>
 }
+
+const patch = <T>(path: string, body: unknown) =>
+  request<T>(path, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', 'X-Requested-By': 'sportsanalyzer' },
+    body: JSON.stringify(body),
+  })
 
 const post = <T>(path: string, body?: unknown) =>
   request<T>(path, {
@@ -193,6 +237,15 @@ export const api = {
   stakeCreateOrder: (outcome_id: string, amount: number) => post<StakeOrder>('/api/stake/orders', { outcome_id, amount }),
   stakeApprove: (id: number) => post(`/api/stake/orders/${id}/approve`),
   stakeReject: (id: number) => post(`/api/stake/orders/${id}/reject`),
+  strategies: () => request<StrategyRow[]>('/api/strategies'),
+  exposure: () => request<Exposure>('/api/stake/exposure'),
+  stakeBets: () => request<StakeBetRow[]>('/api/stake/bets'),
+  cashout: (id: string) => post(`/api/stake/bets/${encodeURIComponent(id)}/cashout`),
+  updateStrategy: (id: number, body: Partial<StrategyRow> & { resume?: boolean; confirm_real_money?: boolean }) =>
+    patch<StrategyRow>(`/api/strategies/${id}`, body),
+  runStrategies: () => post('/api/strategies/run'),
+  ledger: (status = '') => request<LedgerBet[]>(`/api/strategies/bets?limit=200${status ? `&status=${status}` : ''}`),
+  automation: () => request<Automation>('/api/strategies/automation'),
   identityReview: () => request<IdentityReview>('/api/identity/review'),
   resolveMapping: (id: number, teamId: number) => post(`/api/identity/${id}/resolve`, { team_id: teamId }),
   rejectMapping: (id: number) => post(`/api/identity/${id}/reject`),

@@ -53,8 +53,13 @@ class TemplateError(ValueError):
     pass
 
 
-def build_bet_variables(sample: dict[str, Any], outcome_id: str, amount: float, currency: str) -> dict[str, Any]:
-    """Replace the bet-specific fields in a captured variables object; keep everything else."""
+def build_bet_variables(sample: dict[str, Any], outcome_id: str | list[str], amount: float,
+                        currency: str) -> dict[str, Any]:
+    """Replace the bet-specific fields in a captured variables object; keep everything else.
+
+    `outcome_id` may be a list (a multi bet: every leg must win).
+    """
+    outcome_ids = list(outcome_id) if isinstance(outcome_id, list | tuple) else [outcome_id]
     variables = copy.deepcopy(sample)
     replaced: set[str] = set()
 
@@ -62,10 +67,12 @@ def build_bet_variables(sample: dict[str, Any], outcome_id: str, amount: float, 
         if isinstance(node, dict):
             for key, value in list(node.items()):
                 if _OUTCOME_LIST.search(key) and isinstance(value, list):
-                    node[key] = [outcome_id]
+                    node[key] = outcome_ids
                     replaced.add("outcome")
                 elif _OUTCOME_ONE.search(key):
-                    node[key] = outcome_id
+                    if len(outcome_ids) > 1:
+                        raise TemplateError("This bet request takes one outcome; learn a multi bet first.")
+                    node[key] = outcome_ids[0]
                     replaced.add("outcome")
                 elif _AMOUNT.search(key) and isinstance(value, int | float):
                     node[key] = amount
@@ -73,7 +80,7 @@ def build_bet_variables(sample: dict[str, Any], outcome_id: str, amount: float, 
                 elif _CURRENCY.search(key) and isinstance(value, str):
                     node[key] = currency
                     replaced.add("currency")
-                elif _IDENTIFIER.search(key) and isinstance(value, str):
+                elif _IDENTIFIER.search(key) and isinstance(value, str) and value:
                     # A fresh one-time key in the same format Stake used (UUID or short code).
                     node[key] = str(uuid.uuid4()) if _UUID.match(value) else uuid.uuid4().hex[:max(len(value), 8)]
                 else:
@@ -91,7 +98,7 @@ def build_bet_variables(sample: dict[str, Any], outcome_id: str, amount: float, 
     return variables
 
 
-def build_bet_request(operation_name: str, query: str, sample: dict[str, Any], outcome_id: str,
+def build_bet_request(operation_name: str, query: str, sample: dict[str, Any], outcome_id: str | list[str],
                       amount: float, currency: str) -> dict[str, Any]:
     return {"operationName": operation_name, "query": query,
             "variables": build_bet_variables(sample, outcome_id, amount, currency)}
@@ -140,3 +147,136 @@ def bet_result(response: dict[str, Any]) -> tuple[bool, str | None, str]:
         if isinstance(value, dict) and value.get("id"):
             return True, str(value["id"]), "Placed"
     return False, None, "Stake did not return a bet id"
+
+
+# ----------------------------------------------------------------------------- multis and cash-out
+
+MULTI_SUFFIX = "#multi"
+
+
+def template_name(operation_name: str, kind: str, variables: dict[str, Any]) -> str:
+    """Store multi-bet captures separately from single-bet captures of the same mutation."""
+    ids = variables.get("outcomeIds") if isinstance(variables, dict) else None
+    if is_bet_mutation(operation_name, kind) and isinstance(ids, list) and len(ids) > 1:
+        return operation_name + MULTI_SUFFIX
+    return operation_name
+
+
+def is_cashout_mutation(operation_name: str, kind: str) -> bool:
+    return kind == "mutation" and "cashout" in operation_name.lower()
+
+
+_BET_ID = re.compile(r"^betId$|^id$|^iid$", re.I)
+_MULTIPLIER = re.compile(r"multiplier", re.I)
+
+
+def build_cashout_variables(sample: dict[str, Any], bet_id: str, multiplier: float | None) -> dict[str, Any]:
+    variables = copy.deepcopy(sample)
+    found = False
+    for key, value in list(variables.items()):
+        if _BET_ID.search(key) and isinstance(value, str):
+            variables[key] = bet_id
+            found = True
+        elif _MULTIPLIER.search(key) and isinstance(value, int | float) and multiplier is not None:
+            variables[key] = multiplier
+    if not found:
+        raise TemplateError("The learned cash-out request has no bet id field; cash out one bet by hand "
+                            "with Learn mode on.")
+    return variables
+
+
+def _num(value: Any) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def parse_sport_bets(payload: Any) -> list[dict[str, Any]]:
+    """The OWNER's sports bets (singles and multis) from a Stake "My Bets" response.
+
+    Only bets inside a `user { ... }` object count. Stake pages also show other people's bets
+    (e.g. the public high-roller board); those never sit under `user` and are ignored.
+    """
+    bets: dict[str, dict[str, Any]] = {}
+
+    def describe(node: dict[str, Any]) -> str:
+        parts = []
+        for leg in node.get("outcomes") or []:
+            if not isinstance(leg, dict):
+                continue
+            outcome = leg.get("outcome") if isinstance(leg.get("outcome"), dict) else leg
+            fixture = leg.get("fixture") if isinstance(leg.get("fixture"), dict) else {}
+            name = outcome.get("name") if isinstance(outcome, dict) else None
+            parts.append(" · ".join(p for p in (fixture.get("name"), name) if p))
+        return " + ".join(p for p in parts if p)[:500]
+
+    def walk(node: Any, own: bool = False) -> None:
+        if isinstance(node, list):
+            for value in node:
+                walk(value, own)
+            return
+        if not isinstance(node, dict):
+            return
+        kind = str(node.get("__typename") or "")
+        if own and kind in ("SportBet", "SwishBet") and node.get("id"):
+            bets[str(node["id"])] = {
+                "id": str(node["id"]), "status": node.get("status"), "active": node.get("active"),
+                "amount": _num(node.get("amount")), "currency": node.get("currency"),
+                "potential_multiplier": _num(node.get("potentialMultiplier") or node.get("payoutMultiplier")),
+                "payout": _num(node.get("payout")),
+                "cashout_multiplier": _num(node.get("cashoutMultiplier")),
+                "cashout_disabled": node.get("cashoutDisabled"),
+                "description": describe(node) or None,
+                "placed_at": node.get("createdAt"),
+                "raw": node,
+            }
+            return
+        for key, value in node.items():
+            walk(value, own or (key == "user" and isinstance(value, dict)))
+
+    walk(payload)
+    return list(bets.values())
+
+
+# Stake computes the live cash-out value in the browser from streamed odds and its cash-out
+# settings; no server request returns it. This per-leg factor reproduces the values Stake's
+# page showed for the owner's two multis on 2026-11-25 (0.83 and 0.91): value ~= potential
+# multiplier / product(current odds of unsettled legs) x 0.9617^legs. It is an ESTIMATE only
+# and is never used to execute a cash-out.
+CASHOUT_LEG_FACTOR = 0.9617
+
+
+def cashout_view(raw: dict[str, Any]) -> dict[str, Any]:
+    """Availability (exactly Stake's rule) and an estimated cash-out multiplier for one own bet."""
+    legs = []
+    for leg in raw.get("outcomes") or []:
+        market = leg.get("market") or {}
+        outcome = leg.get("outcome") or {}
+        fixture = leg.get("fixture") or {}
+        legs.append({
+            "fixture": fixture.get("name"),
+            "selection": outcome.get("name"),
+            "market": market.get("name"),
+            "odds_at_bet": _num(leg.get("odds")),
+            "current_odds": _num(outcome.get("odds")),
+            "status": leg.get("status"),
+            "open": (market.get("status") == "active" and bool(outcome.get("active"))
+                     and fixture.get("cashoutEnabled", True) is not False),
+        })
+    pending = [leg for leg in legs if (leg["status"] or "pending") == "pending"]
+    reason = None
+    if raw.get("cashoutDisabled"):
+        reason = "Stake has disabled cash-out on this bet"
+    elif not pending:
+        reason = "All legs settled"
+    elif any(not leg["open"] for leg in pending):
+        reason = "A market is suspended (often during live play)"
+    estimate = None
+    potential = _num(raw.get("potentialMultiplier"))
+    if reason is None and potential and all(leg["current_odds"] for leg in pending):
+        product = 1.0
+        for leg in pending:
+            product *= leg["current_odds"]
+        estimate = round(potential / product * CASHOUT_LEG_FACTOR ** len(pending), 4)
+    return {"available": reason is None, "reason": reason, "estimate_multiplier": estimate, "legs": legs}

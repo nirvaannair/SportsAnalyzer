@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
 import {
-  Brain, Bug, CalendarDays, Database, GitMerge, Layers, LayoutDashboard,
+  Brain, Bug, CalendarDays, Database, GitMerge, LayoutDashboard,
   Newspaper, Power, Receipt, Settings, Sparkles, Wallet,
 } from 'lucide-react'
 import type { ComponentType } from 'react'
@@ -9,6 +9,7 @@ import { StatusDot } from './components/ui'
 import { api } from './lib/api'
 import DataSources from './pages/DataSources'
 import IdentityReview from './pages/IdentityReview'
+import Ledger from './pages/Ledger'
 import Matches from './pages/Matches'
 import Models from './pages/Models'
 import Scraper from './pages/Scraper'
@@ -31,9 +32,8 @@ const NAV: { section: string; items: NavItem[] }[] = [
       { to: '/', label: 'Overview', icon: LayoutDashboard },
       { to: '/matches', label: 'Matches', icon: CalendarDays },
       { to: '/value', label: 'Value bets', icon: Sparkles, phase: 4, blurb: 'Opportunities ranked by edge and confidence, with approve and reject for approve-mode strategies.' },
-      { to: '/ledger', label: 'Bet ledger', icon: Receipt, phase: 4, blurb: 'Every proposed, placed and settled bet with odds taken, closing odds and P&L.' },
+      { to: '/ledger', label: 'Bet ledger', icon: Receipt },
       { to: '/stake', label: 'Stake', icon: Wallet },
-      { to: '/strategies', label: 'Strategies', icon: Layers, phase: 4, blurb: 'Flat, fractional Kelly and compounding strategies with bankroll limits and kill switches.' },
     ],
   },
   {
@@ -142,6 +142,8 @@ export default function App() {
             <Route path="/models" element={<Models />} />
             <Route path="/scraper" element={<Scraper />} />
             <Route path="/stake" element={<Stake />} />
+            <Route path="/ledger" element={<Ledger />} />
+            <Route path="/strategies" element={<Navigate to="/" replace />} />
             <Route path="/identity" element={<IdentityReview />} />
             {placeholders.map((item) => (
               <Route

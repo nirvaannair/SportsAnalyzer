@@ -29,6 +29,8 @@ chrome.runtime.onMessage.addListener((message, _sender, reply) => {
           await remember({ appConnected: true, flags, balances: message.payload.balances, error: message.payload.error });
           return reply({ ok: true, flags });
         }
+        case 'bets':
+          return reply({ ok: true, result: await call('/helper/bets', 'POST', message.payload) });
         case 'captured':
           return reply({ ok: true, result: await call('/helper/captured', 'POST', message.payload) });
         case 'next':

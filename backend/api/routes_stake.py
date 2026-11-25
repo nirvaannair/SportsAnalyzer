@@ -25,26 +25,37 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.database.engine import AsyncSessionFactory
 from backend.database.models import (
     AppSetting,
+    StakeBet,
     StakeFixture,
     StakeOperation,
     StakeOrder,
     StakeOutcome,
+    StrategyBet,
 )
 from backend.execution.guardrails import (
     Exposure,
     GuardrailError,
     Limits,
     check_dispatch,
-    check_new_order,
+)
+from backend.execution.orders import (
+    bet_operation,
+    cashout_operation,
+    create_cashout_order,
+    create_stake_order,
 )
 from backend.execution.stake_link import link_stake_fixtures, store_parsed
-from backend.execution.stake_parse import parse_payload
+from backend.execution.stake_parse import parse_payload, parse_start
 from backend.execution.stake_requests import (
+    MULTI_SUFFIX,
     TemplateError,
     bet_result,
     build_bet_request,
+    cashout_view,
     describe_operation,
     is_bet_mutation,
+    parse_sport_bets,
+    template_name,
 )
 from backend.integrations.base import ProviderRequestContext
 from backend.integrations.postgres_raw_repository import PostgresRawPayloadRepository
@@ -89,14 +100,10 @@ async def _exposure(session: AsyncSession) -> Exposure:
     return Exposure(spent_total=float(spent), bets_today=int(bets_today))
 
 
-async def _bet_operation(session: AsyncSession) -> StakeOperation | None:
-    ops = (await session.execute(select(StakeOperation).order_by(StakeOperation.last_seen_at.desc()))).scalars()
-    return next((op for op in ops if is_bet_mutation(op.operation_name, op.kind)), None)
-
-
 def _order_json(o: StakeOrder) -> dict[str, Any]:
     return {c: getattr(o, c) for c in (
-        "id", "created_at", "source", "outcome_id", "description", "amount", "currency", "min_price", "status",
+        "id", "created_at", "source", "kind", "outcome_id", "outcome_ids", "description", "amount", "currency",
+        "min_price", "price_at_creation", "target_bet_id", "status",
         "status_detail", "request_preview", "stake_bet_id", "placed_price", "approved_at", "sent_at", "finished_at")}
 
 
@@ -110,7 +117,10 @@ async def status() -> dict[str, Any]:
         enabled = bool(await _get(session, "stake_execution_enabled", False))
         learn = bool(await _get(session, "stake_learn_mode", False))
         exposure = await _exposure(session)
-        bet_op = await _bet_operation(session)
+        bet_op = await bet_operation(session)
+        multi_op = await bet_operation(session, multi=True)
+        cash_op = await cashout_operation(session)
+        bet_list_op = await _get(session, "stake_bet_list_op")
         counts = dict((await session.execute(
             select(StakeOrder.status, func.count()).group_by(StakeOrder.status))).all())
     last_seen = helper.get("last_seen")
@@ -123,6 +133,9 @@ async def status() -> dict[str, Any]:
         "budget_left": max(0.0, limits.budget - exposure.spent_total),
         "bet_request_learned": bet_op is not None,
         "bet_operation": bet_op.operation_name if bet_op else None,
+        "multi_request_learned": multi_op is not None,
+        "cashout_request_learned": cash_op is not None,
+        "bet_list_learned": bool(bet_list_op),
         "orders_by_status": counts,
     }
 
@@ -189,34 +202,15 @@ class NewOrder(BaseModel):
 
 @router.post("/orders")
 async def create_order(body: NewOrder) -> dict[str, Any]:
-    limits = Limits.from_env()
-    try:
-        check_new_order(body.amount, limits.currency, limits)
-    except GuardrailError as exc:
-        raise HTTPException(400, str(exc)) from exc
     async with AsyncSessionFactory() as session:
         outcome = (await session.execute(select(StakeOutcome).where(
             StakeOutcome.outcome_id == body.outcome_id))).scalar_one_or_none()
         if outcome is None:
             raise HTTPException(404, "Unknown Stake outcome. Open the match on Stake with Learn mode on first.")
-        op = await _bet_operation(session)
-        preview, detail = None, None
-        if op is None:
-            detail = "Waiting: the bet request hasn't been learned yet (place one manual bet with Learn mode on)."
-        else:
-            try:
-                preview = build_bet_request(op.operation_name, op.query, op.sample_variables, outcome.outcome_id,
-                                            body.amount, limits.currency)["variables"]
-            except TemplateError as exc:
-                detail = str(exc)
-        order = StakeOrder(
-            source="manual_test", outcome_id=outcome.outcome_id,
-            description=f"{outcome.fixture_name or '?'} · {outcome.market_name or '?'}"
-                        f"{' ' + outcome.specifiers if outcome.specifiers else ''} · {outcome.name}",
-            amount=body.amount, currency=limits.currency, min_price=body.min_price or None,
-            status="pending_approval", status_detail=detail, request_preview=preview,
-        )
-        session.add(order)
+        try:
+            order = await create_stake_order(session, outcome, body.amount, source="manual_test", auto_approve=False)
+        except GuardrailError as exc:
+            raise HTTPException(400, str(exc)) from exc
         await session.commit()
         return _order_json(order)
 
@@ -267,8 +261,19 @@ async def heartbeat(body: Heartbeat) -> dict[str, Any]:
         })
         learn = bool(await _get(session, "stake_learn_mode", False))
         enabled = bool(await _get(session, "stake_execution_enabled", False))
+        bet_list_request = None
+        list_name = await _get(session, "stake_bet_list_op")
+        if list_name:
+            op = (await session.execute(select(StakeOperation).where(
+                StakeOperation.operation_name == list_name))).scalar_one_or_none()
+            if op:
+                variables = dict(op.sample_variables or {})
+                if "limit" in variables:
+                    variables["limit"] = 50  # all open bets, not just the first few
+                bet_list_request = {"operationName": op.operation_name, "query": op.query, "variables": variables}
         await session.commit()
-    return {"learn_mode": learn, "execution_enabled": enabled, "poll_seconds": 5}
+    return {"learn_mode": learn, "execution_enabled": enabled, "poll_seconds": 5,
+            "bet_list_request": bet_list_request, "bet_list_every_seconds": 60}
 
 
 @router.get("/helper/token")
@@ -295,6 +300,7 @@ async def captured(body: Captured) -> dict[str, Any]:
             if described is None:
                 continue
             name, kind = described
+            name = template_name(name, kind, op.get("variables") or {})
             statement = insert(StakeOperation).values(
                 operation_name=name[:128], kind=kind, query=query, sample_variables=_scrub(op.get("variables") or {}))
             await session.execute(statement.on_conflict_do_update(
@@ -319,6 +325,11 @@ async def captured(body: Captured) -> dict[str, Any]:
             fixtures, outcomes = parse_payload(data)
             await store_parsed(session, fixtures, outcomes)
             outcomes_seen += len(outcomes)
+            bets = parse_sport_bets(data)
+            if bets:
+                await _store_stake_bets(session, bets)
+                if response.get("operationName"):  # remember it: the helper re-runs it every minute
+                    await _put(session, "stake_bet_list_op", response["operationName"])
         await link_stake_fixtures(session)
         await session.commit()
     return {"stored": stored, "outcomes": outcomes_seen}
@@ -342,14 +353,25 @@ async def next_order() -> dict[str, Any]:
             await session.commit()
             return {"order": None}
         enabled = bool(await _get(session, "stake_execution_enabled", False))
-        op = await _bet_operation(session)
+        if order.kind == "cashout":
+            # Your own click; it only takes money off the table, so it doesn't wait for Execution.
+            # The helper presses Stake's own Cashout button: Stake's exact value, Stake's own flow.
+            order.status, order.sent_at = "sent", datetime.now(UTC)
+            await session.commit()
+            preview = order.request_preview or {}
+            return {"order": {"id": order.id, "kind": "cashout", "description": order.description,
+                              "iid": preview.get("iid"), "bet_id": preview.get("bet_id"),
+                              "estimate": preview.get("estimate")}}
+
+        op = await bet_operation(session, multi=order.kind == "multi")
         if op is None or not enabled:
             await session.commit()  # leave it approved; it goes out once both are true
             return {"order": None, "reason": "Execution is off" if not enabled else "Bet request not learned yet"}
         try:
             check_dispatch(order.amount, order.currency, limits, await _exposure(session), enabled)
-            request = build_bet_request(op.operation_name, op.query, op.sample_variables, order.outcome_id,
-                                        order.amount, order.currency)
+            outcome = order.outcome_ids if order.kind == "multi" else order.outcome_id
+            request = build_bet_request(op.operation_name.replace(MULTI_SUFFIX, ""), op.query, op.sample_variables,
+                                        outcome, order.amount, order.currency)
         except (GuardrailError, TemplateError) as exc:
             order.status, order.status_detail, order.finished_at = "blocked", str(exc), datetime.now(UTC)
             await session.commit()
@@ -374,8 +396,127 @@ async def order_result(order_id: int, body: OrderResult) -> dict[str, Any]:
             raise HTTPException(409, "Order is not waiting for a result")
         response = _scrub(body.response or {})
         placed, bet_id, message = bet_result(response) if body.response else (False, None, body.error or "Error")
-        order.status = "placed" if placed else "failed"
-        order.stake_bet_id, order.status_detail = bet_id, message
+        if order.kind == "cashout":
+            data = (body.response or {}).get("data") or {}
+            result = data.get("cashoutSportBet") if isinstance(data, dict) else None
+            ok = bool(result) and not (body.response or {}).get("errors")
+            if ok:
+                payout = result.get("payout")
+                order.status = "placed"
+                order.status_detail = f"Cashed out for ₹{payout:g}" if isinstance(payout, int | float) else "Cashed out"
+                order.placed_price = payout if isinstance(payout, int | float) else None
+            else:
+                order.status, order.status_detail = "failed", body.error or message
+        else:
+            order.status = "placed" if placed else "failed"
+            order.stake_bet_id, order.status_detail = bet_id, message
         order.response, order.finished_at = response, datetime.now(UTC)
         await session.commit()
         return _order_json(order)
+
+
+# ----------------------------------------------------------------------------- your Stake bets, payouts, cash-out
+
+async def _store_stake_bets(session: AsyncSession, bets: list[dict[str, Any]]) -> None:
+    for b in bets:
+        values = {**b}
+        values["placed_at"] = parse_start(values.pop("placed_at", None))  # Stake uses "Wed, 25 Nov 2026 12:11:39 GMT"
+        statement = insert(StakeBet).values(**values)
+        await session.execute(statement.on_conflict_do_update(
+            index_elements=["id"], set_={k: statement.excluded[k] for k in values if k != "id"}))
+
+
+class BetList(BaseModel):
+    data: dict[str, Any] | None = None
+
+
+@router.post("/helper/bets")
+async def helper_bets(body: BetList) -> dict[str, Any]:
+    """The helper re-runs your Stake "My Bets" request every minute; this stores the result."""
+    bets = parse_sport_bets(_scrub(body.data or {}))
+    async with AsyncSessionFactory() as session:
+        await _store_stake_bets(session, bets)
+        await session.commit()
+    return {"bets": len(bets)}
+
+
+def _is_open(b: StakeBet) -> bool:
+    if b.active is not None:
+        return bool(b.active)
+    return (b.status or "").lower() in ("active", "pending", "open", "confirmed")
+
+
+@router.get("/bets")
+async def stake_bets(open_only: bool = True) -> list[dict[str, Any]]:
+    async with AsyncSessionFactory() as session:
+        rows = (await session.execute(select(StakeBet).order_by(StakeBet.placed_at.desc().nulls_last()))).scalars().all()
+    out = []
+    for b in rows:
+        if open_only and not _is_open(b):
+            continue
+        amount = b.amount or 0.0
+        view = cashout_view(b.raw or {})
+        legs = view["legs"]
+        title = (f"{len(legs)}-leg multi" if len(legs) > 1
+                 else f"{(legs[0]['selection'] if legs else None) or b.description or b.id}")
+        out.append({
+            "id": b.id, "status": b.status, "open": _is_open(b), "amount": amount, "currency": b.currency,
+            "title": title, "legs": legs, "placed_at": b.placed_at, "updated_at": b.updated_at,
+            "potential_payout": round(amount * b.potential_multiplier, 2) if b.potential_multiplier else None,
+            "cashout_available": view["available"], "cashout_reason": view["reason"],
+            "cashout_estimate": (round(amount * view["estimate_multiplier"], 2)
+                                 if view["estimate_multiplier"] is not None else None),
+        })
+    return out
+
+
+@router.post("/bets/{bet_id}/cashout")
+async def cashout(bet_id: str) -> dict[str, Any]:
+    """Your click: the helper opens the bet on Stake and presses Stake's own Cashout button."""
+    async with AsyncSessionFactory() as session:
+        bet = await session.get(StakeBet, bet_id)
+        if bet is None or not _is_open(bet):
+            raise HTTPException(404, "No open Stake bet with that id")
+        view = cashout_view(bet.raw or {})
+        if not view["available"]:
+            raise HTTPException(409, f"Stake isn't offering a cash-out right now: {view['reason']}")
+        busy = (await session.execute(select(func.count()).select_from(StakeOrder).where(
+            StakeOrder.kind == "cashout", StakeOrder.target_bet_id == bet_id,
+            StakeOrder.status.in_(["approved", "sent"])))).scalar_one()
+        if busy:
+            raise HTTPException(409, "A cash-out for this bet is already in progress")
+        legs = view["legs"]
+        title = f"{len(legs)}-leg multi" if len(legs) > 1 else (legs[0]["selection"] if legs else bet.id)
+        estimate = round((bet.amount or 0) * view["estimate_multiplier"], 2) if view["estimate_multiplier"] else None
+        try:
+            order = await create_cashout_order(session, bet, title, estimate)
+        except TemplateError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        await session.commit()
+        return _order_json(order)
+
+
+@router.get("/exposure")
+async def exposure() -> dict[str, Any]:
+    """What is in play right now: stakes and estimated total payout, real (Stake) and paper."""
+    async with AsyncSessionFactory() as session:
+        real = [b for b in (await session.execute(select(StakeBet))).scalars().all() if _is_open(b)]
+        paper = (await session.execute(select(StrategyBet).where(
+            StrategyBet.status == "open", StrategyBet.mode == "paper"))).scalars().all()
+        pending = (await session.execute(select(StakeOrder).where(
+            StakeOrder.status.in_(["pending_approval", "approved", "sent"]), StakeOrder.kind != "cashout"))).scalars().all()
+    real_stake = sum(b.amount or 0 for b in real)
+    real_payout = sum((b.amount or 0) * (b.potential_multiplier or 0) for b in real)
+    real_cashout = 0.0
+    for b in real:
+        view = cashout_view(b.raw or {})
+        if view["estimate_multiplier"] is not None:
+            real_cashout += (b.amount or 0) * view["estimate_multiplier"]
+    return {
+        "real": {"bets": len(real), "stake": round(real_stake, 2), "potential_payout": round(real_payout, 2),
+                 "cashout_value": round(real_cashout, 2)},
+        "pending_orders": {"count": len(pending), "stake": round(sum(o.amount for o in pending), 2),
+                           "potential_payout": round(sum(o.amount * (o.price_at_creation or 0) for o in pending), 2)},
+        "paper": {"bets": len(paper), "stake": round(sum(b.stake for b in paper), 2),
+                  "potential_payout": round(sum(b.stake * b.price for b in paper), 2)},
+    }

@@ -7,6 +7,7 @@ Limits come from .env (defaults are deliberately tiny for the testing phase):
     STAKE_MAX_BET=1              per bet, in STAKE_CURRENCY
     STAKE_TEST_BUDGET=20         total that may ever be sent to Stake
     STAKE_MAX_BETS_PER_DAY=10
+    STAKE_APPROVAL_ABOVE=1000    bets above this always wait for your click, even in Auto mode
 """
 
 from __future__ import annotations
@@ -21,6 +22,7 @@ class Limits:
     budget: float
     max_bets_per_day: int
     currency: str
+    approval_above: float = 1000.0
 
     @classmethod
     def from_env(cls) -> Limits:
@@ -35,6 +37,7 @@ class Limits:
             budget=number("STAKE_TEST_BUDGET", 20.0),
             max_bets_per_day=int(number("STAKE_MAX_BETS_PER_DAY", 10)),
             currency=(os.getenv("STAKE_CURRENCY", "inr").strip().lower() or "inr"),
+            approval_above=number("STAKE_APPROVAL_ABOVE", 1000.0),
         )
 
 
@@ -67,3 +70,8 @@ def check_dispatch(amount: float, currency: str, limits: Limits, exposure: Expos
             f"Budget reached: ₹{exposure.spent_total:g} of ₹{limits.budget:g} already used.")
     if exposure.bets_today >= limits.max_bets_per_day:
         raise GuardrailError(f"Daily limit reached ({limits.max_bets_per_day} bets).")
+
+
+def needs_approval(amount: float, limits: Limits) -> bool:
+    """Large bets always wait for a human click, whatever the strategy's mode."""
+    return amount > limits.approval_above

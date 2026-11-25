@@ -3,7 +3,7 @@
 // learned, and, ONLY if execution is switched on in the dashboard, asks for the next bet
 // you approved and places it from this tab, using this tab's own logged-in session.
 
-const VERSION = '0.1.1';
+const VERSION = '0.1.3';
 const MARK = '__sportsanalyzer__';
 const POLL_MS = 5000;
 const BALANCES = `query UserBalances { user { id balances { available { amount currency } vault { amount currency } } } }`;
@@ -12,6 +12,7 @@ let learnMode = false;
 let busy = false;
 let captured = { operations: [], responses: [] };
 let hookStats = null; // what the in-page listener has noticed (counts only)
+let lastBetList = 0; // when your Stake bets were last refreshed
 
 const send = (message) => new Promise((resolve) => chrome.runtime.sendMessage(message, resolve));
 
@@ -71,10 +72,83 @@ function setLearn(on) {
   window.postMessage({ [MARK]: 'learn', on }, location.origin);
 }
 
+// ---------------------------------------------------------------- exact cash-out
+// For a cash-out you clicked on the dashboard, open that bet's page in this tab and press
+// Stake's own Cashout button, so Stake's exact live amount is used. Stop if anything is unclear.
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+let cashoutWaiter = null;
+window.addEventListener('message', (event) => {
+  if (event.source === window && event.data && event.data[MARK] === 'cashout_result' && cashoutWaiter) {
+    cashoutWaiter(event.data.data);
+  }
+});
+
+function visible(el) {
+  const r = el.getBoundingClientRect();
+  return r.width > 0 && r.height > 0 && getComputedStyle(el).visibility !== 'hidden';
+}
+
+function findButton(pattern, root = document) {
+  return [...root.querySelectorAll('button')].find((b) => visible(b) && pattern.test((b.textContent || '').trim()));
+}
+
+async function waitFor(fn, ms) {
+  const end = Date.now() + ms;
+  while (Date.now() < end) {
+    const found = fn();
+    if (found) return found;
+    await sleep(250);
+  }
+  return null;
+}
+
+function openBetPage(iid) {
+  const url = new URL(location.href);
+  url.searchParams.set('iid', iid);
+  url.searchParams.set('modal', 'bet');
+  const a = document.createElement('a');
+  a.href = url.pathname + url.search; // a normal link click lets Stake's own router open its bet page
+  a.style.display = 'none';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+}
+
+async function runCashout(order) {
+  const dialogRoot = () => document.querySelector('[role="dialog"]') || document;
+  openBetPage(order.iid);
+  // Stake's button reads "Cashout ₹0.83". "Cashout is not available" has no amount.
+  const button = await waitFor(() => findButton(/^cash\s*out\b.*\d/i, dialogRoot()), 10000);
+  if (!button) {
+    const unavailable = findButton(/cash\s*out.*not available/i, dialogRoot());
+    return { error: unavailable ? 'Stake says cash-out is not available right now' : "Couldn't find Stake's Cashout button on the bet page" };
+  }
+  if (button.disabled) return { error: "Stake's Cashout button is disabled right now" };
+  const shown = (button.textContent || '').trim();
+  const result = new Promise((resolve) => {
+    cashoutWaiter = resolve;
+    setTimeout(() => resolve(null), 20000);
+  });
+  button.click();
+  // Some Stake flows ask to confirm; press Stake's own confirm button if it appears.
+  const confirm = await waitFor(() => findButton(/^confirm/i, dialogRoot()), 3000);
+  if (confirm && !confirm.disabled) confirm.click();
+  const data = await result;
+  cashoutWaiter = null;
+  if (!data) return { error: `Pressed "${shown}" but Stake didn't confirm within 20 seconds. Check My Bets.` };
+  return { response: data };
+}
+
 async function placeNext() {
   const reply = await send({ type: 'next' });
   const order = reply && reply.ok && reply.result.order;
   if (!order) return;
+  if (order.kind === 'cashout') {
+    const payload = await runCashout(order);
+    await send({ type: 'result', orderId: order.id, payload });
+    return;
+  }
   let payload;
   try {
     payload = { response: await graphql(order.request) };
@@ -108,7 +182,19 @@ async function tick() {
       captured = { operations: [], responses: [] };
       await send({ type: 'captured', payload: batch });
     }
-    if (beat.flags.execution_enabled) await placeNext();
+    // Refresh your Stake "My Bets" list (stakes, potential payouts, cash-out values) once a minute.
+    const listRequest = beat.flags.bet_list_request;
+    if (listRequest && Date.now() - lastBetList > (beat.flags.bet_list_every_seconds || 60) * 1000) {
+      lastBetList = Date.now();
+      try {
+        const data = await graphql(listRequest);
+        if (data && data.data) await send({ type: 'bets', payload: { data: data.data } });
+      } catch (_) {
+        // try again next minute
+      }
+    }
+    // Bets you approved, and cash-outs you clicked (cash-outs don't need Execution to be on).
+    await placeNext();
   } finally {
     busy = false;
   }

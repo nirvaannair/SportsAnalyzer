@@ -518,7 +518,11 @@ class StakeOrder(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
-    source: Mapped[str] = mapped_column(String(32), nullable=False)  # manual_test | strategy:<name>
+    source: Mapped[str] = mapped_column(String(120), nullable=False)  # manual_test | strategy:<name> | cashout
+    kind: Mapped[str] = mapped_column(String(16), nullable=False, server_default="bet")  # bet | multi | cashout
+    outcome_ids: Mapped[list[str] | None] = mapped_column(JSONB)  # multi legs
+    target_bet_id: Mapped[str | None] = mapped_column(String(128))  # cash-out: which Stake bet
+    price_at_creation: Mapped[float | None] = mapped_column(Float)
     match_id: Mapped[int | None] = mapped_column(ForeignKey("matches.id"))
     outcome_id: Mapped[str] = mapped_column(String(128), nullable=False)
     description: Mapped[str] = mapped_column(String(300), nullable=False)
@@ -558,4 +562,102 @@ class StakeFixture(Base):
     link_detail: Mapped[str | None] = mapped_column(String(200))
     seen_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+# ---------------------------------------------------------------------------
+# Strategies (paper / approve / auto) and their bets
+# ---------------------------------------------------------------------------
+
+
+class Strategy(Base):
+    """A betting strategy with its own bankroll.
+
+    kind:   flat (stake_pct of the pot) | kelly (kelly_fraction x Kelly stake)
+    mode:   paper (simulated) | approve (real, waits for your click) | auto (real, no click)
+    reinvest_pct: share of each win's profit that goes back into the pot (the rest is banked).
+    """
+
+    __tablename__ = "strategies"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(80), unique=True, nullable=False)
+    kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    mode: Mapped[str] = mapped_column(String(16), nullable=False, server_default="paper")
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
+    paused_reason: Mapped[str | None] = mapped_column(String(200))
+    model: Mapped[str] = mapped_column(String(32), nullable=False, server_default="blend")
+    bankroll_start: Mapped[float] = mapped_column(Float, nullable=False)
+    reinvest_pct: Mapped[float] = mapped_column(Float, nullable=False, server_default="100")
+    stake_pct: Mapped[float] = mapped_column(Float, nullable=False, server_default="2")
+    kelly_fraction: Mapped[float] = mapped_column(Float, nullable=False, server_default="0.25")
+    max_stake: Mapped[float] = mapped_column(Float, nullable=False, server_default="1")
+    min_edge: Mapped[float] = mapped_column(Float, nullable=False, server_default="0.05")
+    min_price: Mapped[float] = mapped_column(Float, nullable=False, server_default="1.3")
+    max_price: Mapped[float] = mapped_column(Float, nullable=False, server_default="6")
+    min_prob: Mapped[float] = mapped_column(Float, nullable=False, server_default="0")  # confidence band
+    max_prob: Mapped[float] = mapped_column(Float, nullable=False, server_default="1")
+    multi_legs: Mapped[int] = mapped_column(Integer, nullable=False, server_default="3")  # for kind="multi"
+    markets: Mapped[list[str]] = mapped_column(JSONB, nullable=False, server_default='["1x2"]')
+    leagues: Mapped[list[str]] = mapped_column(JSONB, nullable=False, server_default="[]")  # [] = all
+    max_bets_per_day: Mapped[int] = mapped_column(Integer, nullable=False, server_default="5")
+    drawdown_stop_pct: Mapped[float] = mapped_column(Float, nullable=False, server_default="20")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class StrategyBet(Base):
+    """One bet a strategy decided to make (simulated in paper mode, real otherwise)."""
+
+    __tablename__ = "strategy_bets"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    strategy_id: Mapped[int] = mapped_column(ForeignKey("strategies.id", ondelete="CASCADE"), nullable=False)
+    match_id: Mapped[int] = mapped_column(ForeignKey("matches.id"), nullable=False)
+    market: Mapped[str] = mapped_column(String(16), nullable=False)  # 1x2 | ou25 | btts
+    selection: Mapped[str] = mapped_column(String(16), nullable=False)
+    mode: Mapped[str] = mapped_column(String(16), nullable=False)
+    p_model: Mapped[float] = mapped_column(Float, nullable=False)
+    price: Mapped[float] = mapped_column(Float, nullable=False)
+    price_source: Mapped[str] = mapped_column(String(32), nullable=False)  # stake | market_avg
+    edge: Mapped[float] = mapped_column(Float, nullable=False)
+    stake: Mapped[float] = mapped_column(Float, nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, server_default="open")  # open won lost void
+    profit: Mapped[float | None] = mapped_column(Float)
+    stake_order_id: Mapped[int | None] = mapped_column(ForeignKey("stake_orders.id", ondelete="SET NULL"))
+    legs: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONB)  # multi bets: one entry per selection
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    settled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    __table_args__ = (
+        UniqueConstraint("strategy_id", "match_id", "market", name="uq_strategy_bets_one_per_market"),
+        Index("ix_strategy_bets_status", "status", "match_id"),
+    )
+
+
+class StakeBet(Base):
+    """A bet as it exists on Stake right now (read by the helper from your My Bets list).
+
+    Gives the real stake, potential payout, status and current cash-out value.
+    """
+
+    __tablename__ = "stake_bets"
+
+    id: Mapped[str] = mapped_column(String(128), primary_key=True)  # Stake bet id
+    status: Mapped[str | None] = mapped_column(String(32))
+    active: Mapped[bool | None] = mapped_column(Boolean)
+    amount: Mapped[float | None] = mapped_column(Float)
+    currency: Mapped[str | None] = mapped_column(String(8))
+    potential_multiplier: Mapped[float | None] = mapped_column(Float)
+    payout: Mapped[float | None] = mapped_column(Float)
+    cashout_multiplier: Mapped[float | None] = mapped_column(Float)
+    cashout_disabled: Mapped[bool | None] = mapped_column(Boolean)
+    description: Mapped[str | None] = mapped_column(Text)
+    placed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    raw: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
     )
