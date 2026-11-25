@@ -134,13 +134,19 @@ def _parse_date(value: str) -> date:
     raise ValueError(f"Unrecognised date: {value!r}")
 
 
-def parse_csv(text: str, league: League) -> list[ParsedMatch]:
-    """Parse one football-data.co.uk CSV. Rows without teams or a date are skipped."""
+def parse_csv(text: str, league: League, only_division: bool = False) -> list[ParsedMatch]:
+    """Parse one football-data.co.uk CSV. Rows without teams or a date are skipped.
+
+    only_division: keep only rows whose Div column is this league's (for the mixed
+    upcoming-fixtures file, which lists many leagues in one CSV).
+    """
     tz = ZoneInfo(league.timezone)
     matches: list[ParsedMatch] = []
 
     for row in csv.DictReader(io.StringIO(text)):
         row = {(k or "").strip(): (v or "").strip() for k, v in row.items()}
+        if only_division and row.get("Div") != league.fdcuk_division:
+            continue
         home, away, raw_date = row.get("HomeTeam"), row.get("AwayTeam"), row.get("Date")
         if not home or not away or not raw_date:
             continue
@@ -282,6 +288,53 @@ async def import_season(session: AsyncSession, client: httpx.AsyncClient, league
     season_id = await ensure_season(session, competition_id, start_year)
     n_matches, n_odds = await _upsert(session, competition_id, season_id, league, parsed, teams)
     return ImportResult(league.code, start_year, "imported", n_matches, n_odds)
+
+
+FIXTURES_URL = "https://www.football-data.co.uk/fixtures.csv"
+
+
+def season_start_for(day: date) -> int:
+    """European seasons start in July: 2026-11-25 -> 2026, 2027-03-01 -> 2026."""
+    return day.year if day.month >= 7 else day.year - 1
+
+
+async def import_fixtures(session_factory: Callable[[], AsyncSession],
+                          leagues: Iterable[League] = LEAGUES) -> dict[str, int]:
+    """Import the upcoming-fixtures file (next few days, all leagues, with current odds).
+
+    Fixtures become `scheduled` matches; the results import later fills in the score on
+    the same row (matches are unique on home team, away team and date).
+    """
+    async with httpx.AsyncClient(headers={"User-Agent": USER_AGENT}, follow_redirects=True,
+                                 timeout=30) as client:
+        response = await client.get(FIXTURES_URL)
+    response.raise_for_status()
+    text = decode_csv(response.content)
+
+    counts: dict[str, int] = {}
+    async with session_factory() as session:
+        await PostgresRawPayloadRepository(session).store_if_new(RawPayload.from_request_context(
+            ProviderRequestContext(provider_name=PROVIDER, endpoint="fixtures.csv",
+                                   requested_at=datetime.now(UTC), request_id=str(uuid4())),
+            text,
+        ))
+        competition_ids = await ensure_competitions(session)
+        teams = TeamDirectory(PROVIDER)
+        await teams.load(session)
+        for league in leagues:
+            parsed = parse_csv(text, league, only_division=True)
+            by_season: dict[int, list[ParsedMatch]] = {}
+            for match in parsed:
+                by_season.setdefault(season_start_for(match.match_date), []).append(match)
+            total = 0
+            for start_year, matches in by_season.items():
+                season_id = await ensure_season(session, competition_ids[league.code], start_year)
+                n_matches, _ = await _upsert(session, competition_ids[league.code], season_id,
+                                             league, matches, teams)
+                total += n_matches
+            counts[league.code] = total
+        await session.commit()
+    return counts
 
 
 async def import_all(session_factory: Callable[[], AsyncSession], leagues: Iterable[League] = LEAGUES,

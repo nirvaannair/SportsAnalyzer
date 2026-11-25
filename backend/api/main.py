@@ -11,11 +11,14 @@ from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 
 from dotenv import load_dotenv
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from sqlalchemy import func, select, text
 
 from backend.api.routes_data import router as data_router
+from backend.api.routes_scraper import router as scraper_router
+from backend.api.routes_stake import router as stake_router
 from backend.core.config import ENV_FILE
 from backend.database.engine import AsyncSessionFactory, dispose_database_engine
 from backend.database.models import RawProviderObservation
@@ -49,6 +52,20 @@ app.add_middleware(
     allow_headers=["*"],
 )
 app.include_router(data_router)
+app.include_router(scraper_router)
+app.include_router(stake_router)
+
+
+@app.middleware("http")
+async def require_app_header(request: Request, call_next):
+    """Block cross-site requests: any other website open in the browser could otherwise send
+    POSTs to this local API (e.g. approve a bet). Our own dashboard and the Stake helper add a
+    custom header, which browsers never let a foreign site add without a CORS preflight we deny."""
+    path = request.url.path
+    sensitive = request.method not in ("GET", "HEAD", "OPTIONS") or path == "/api/stake/helper/token"
+    if path.startswith("/api/") and sensitive and request.headers.get("x-requested-by") != "sportsanalyzer":
+        return JSONResponse({"detail": "Missing X-Requested-By header"}, status_code=403)
+    return await call_next(request)
 
 
 @app.get("/api/health")

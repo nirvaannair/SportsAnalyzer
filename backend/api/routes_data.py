@@ -14,7 +14,9 @@ from backend.database.engine import AsyncSessionFactory
 from backend.database.models import (
     Competition,
     Match,
+    ModelRun,
     OddsQuote,
+    Prediction,
     ProviderEntityMapping,
     Season,
     Team,
@@ -22,6 +24,41 @@ from backend.database.models import (
 from backend.identity.mappings import MappingStatus, ResolutionMethod
 
 router = APIRouter(prefix="/api")
+
+DEFAULT_MODEL = "blend"  # most accurate in the walk-forward backtest
+PREDICTION_FIELDS = ("p_home", "p_draw", "p_away", "p_over25", "p_btts", "exp_home_goals", "exp_away_goals")
+
+
+async def _predictions_for(session, match_ids: list[int], model: str) -> dict[int, dict[str, Any]]:
+    """Live prediction if there is one, otherwise the backtest prediction."""
+    if not match_ids:
+        return {}
+    rows = (await session.execute(
+        select(Prediction, ModelRun.kind)
+        .join(ModelRun, ModelRun.id == Prediction.run_id)
+        .where(Prediction.match_id.in_(match_ids), ModelRun.model == model)
+    )).all()
+    out: dict[int, dict[str, Any]] = {}
+    for prediction, kind in sorted(rows, key=lambda r: r[1] == "live"):  # live overwrites backtest
+        out[prediction.match_id] = {"source": kind, **{f: getattr(prediction, f) for f in PREDICTION_FIELDS}}
+    return out
+
+
+@router.get("/models")
+async def models() -> list[dict[str, Any]]:
+    """Latest backtest of each model with its metrics (scored on real results)."""
+    async with AsyncSessionFactory() as session:
+        runs = (await session.execute(
+            select(ModelRun).where(ModelRun.kind == "backtest").order_by(ModelRun.model)
+        )).scalars().all()
+        live = dict((await session.execute(
+            select(ModelRun.model, ModelRun.trained_until).where(ModelRun.kind == "live")
+        )).all())
+    return [
+        {"model": r.model, "created_at": r.created_at, "params": r.params, "metrics": r.metrics,
+         "live_trained_until": live.get(r.model), "default": r.model == DEFAULT_MODEL}
+        for r in runs
+    ]
 
 
 @router.get("/summary")
@@ -73,8 +110,13 @@ async def matches(
     season: int = Query(..., description="season start year"),
     limit: int = Query(50, le=500),
     offset: int = 0,
+    model: str = Query(DEFAULT_MODEL, description="elo, dixon_coles or blend"),
 ) -> dict[str, Any]:
-    """Matches for one league-season, newest first, with Pinnacle (or average) closing 1X2 odds."""
+    """Matches for one league-season, newest first, with closing 1X2 odds and the model's prediction.
+
+    Upcoming matches use the latest live run; finished ones use the walk-forward backtest,
+    so every prediction shown is one the model made *before* the match.
+    """
     home, away = aliased(Team), aliased(Team)
     async with AsyncSessionFactory() as session:
         base = (
@@ -105,6 +147,8 @@ async def matches(
                 key = f"{bookmaker}:{market}:{'close' if is_closing else 'open'}"
                 odds.setdefault(match_id, {}).setdefault(key, {})[selection] = float(price)
 
+        predictions = await _predictions_for(session, ids, model)
+
     def best_1x2(match_id: int) -> dict[str, Any] | None:
         book = odds.get(match_id, {})
         for key in ("pinnacle:1x2:close", "avg:1x2:close", "pinnacle:1x2:open", "avg:1x2:open"):
@@ -122,6 +166,7 @@ async def matches(
                 "home_goals": m.home_goals, "away_goals": m.away_goals,
                 "ht_home_goals": m.ht_home_goals, "ht_away_goals": m.ht_away_goals,
                 "odds_1x2": best_1x2(m.id),
+                "prediction": predictions.get(m.id),
             }
             for m, home_name, away_name in rows
         ],

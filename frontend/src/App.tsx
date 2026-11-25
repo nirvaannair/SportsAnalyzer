@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import {
-  Brain, CalendarDays, Database, GitMerge, Layers, LayoutDashboard,
-  Newspaper, Power, Receipt, Settings, Sparkles,
+  Brain, Bug, CalendarDays, Database, GitMerge, Layers, LayoutDashboard,
+  Newspaper, Power, Receipt, Settings, Sparkles, Wallet,
 } from 'lucide-react'
 import type { ComponentType } from 'react'
 import { NavLink, Navigate, Route, Routes } from 'react-router-dom'
@@ -10,6 +10,9 @@ import { api } from './lib/api'
 import DataSources from './pages/DataSources'
 import IdentityReview from './pages/IdentityReview'
 import Matches from './pages/Matches'
+import Models from './pages/Models'
+import Scraper from './pages/Scraper'
+import Stake from './pages/Stake'
 import Overview from './pages/Overview'
 import Placeholder from './pages/Placeholder'
 
@@ -29,13 +32,14 @@ const NAV: { section: string; items: NavItem[] }[] = [
       { to: '/matches', label: 'Matches', icon: CalendarDays },
       { to: '/value', label: 'Value bets', icon: Sparkles, phase: 4, blurb: 'Opportunities ranked by edge and confidence, with approve and reject for approve-mode strategies.' },
       { to: '/ledger', label: 'Bet ledger', icon: Receipt, phase: 4, blurb: 'Every proposed, placed and settled bet with odds taken, closing odds and P&L.' },
+      { to: '/stake', label: 'Stake', icon: Wallet },
       { to: '/strategies', label: 'Strategies', icon: Layers, phase: 4, blurb: 'Flat, fractional Kelly and compounding strategies with bankroll limits and kill switches.' },
     ],
   },
   {
     section: 'Analysis',
     items: [
-      { to: '/models', label: 'Models', icon: Brain, phase: 3, blurb: 'Backtests, calibration, log loss and closing line value per model version.' },
+      { to: '/models', label: 'Models', icon: Brain },
       { to: '/news', label: 'Team news', icon: Newspaper, phase: 2, blurb: 'Injury and suspension feed linked to players, with estimated match impact.' },
     ],
   },
@@ -43,6 +47,7 @@ const NAV: { section: string; items: NavItem[] }[] = [
     section: 'System',
     items: [
       { to: '/sources', label: 'Data sources', icon: Database },
+      { to: '/scraper', label: 'Scraper', icon: Bug },
       { to: '/identity', label: 'Identity review', icon: GitMerge },
       { to: '/settings', label: 'Settings', icon: Settings, phase: 1, blurb: 'Schedules, thresholds and key status.' },
     ],
@@ -53,6 +58,7 @@ function Sidebar() {
   const health = useQuery({ queryKey: ['health'], queryFn: api.health })
   const summary = useQuery({ queryKey: ['summary'], queryFn: api.summary })
   const reviewCount = summary.data?.identity_review ?? 0
+  const stake = useQuery({ queryKey: ['stake', 'status'], queryFn: api.stakeStatus })
   const dbTone = health.isError ? 'bad' : health.data?.database.ok ? 'ok' : health.isLoading ? 'off' : 'bad'
   const dbLabel = health.isError
     ? 'API offline'
@@ -107,13 +113,16 @@ function Sidebar() {
         <div className="flex items-center gap-2 text-xs text-zinc-500 dark:text-zinc-400">
           <StatusDot tone={dbTone} /> {dbLabel}
         </div>
-        <button
-          disabled
-          title="Bet execution arrives in Phase 4; nothing can be placed yet."
-          className="flex w-full items-center justify-center gap-2 rounded-lg border border-zinc-200 px-3 py-1.5 text-xs font-medium text-zinc-400 dark:border-zinc-800 dark:text-zinc-500"
+        <NavLink
+          to="/stake"
+          className={`flex w-full items-center justify-center gap-2 rounded-lg border px-3 py-1.5 text-xs font-medium ${
+            stake.data?.execution_enabled
+              ? 'border-amber-300 bg-amber-50 text-amber-700 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-300'
+              : 'border-zinc-200 text-zinc-500 hover:bg-zinc-50 dark:border-zinc-800 dark:text-zinc-400 dark:hover:bg-zinc-800'
+          }`}
         >
-          <Power className="size-3.5" /> Execution off · Paper mode
-        </button>
+          <Power className="size-3.5" /> {stake.data?.execution_enabled ? 'Stake execution ON' : 'Stake execution off'}
+        </NavLink>
       </div>
     </aside>
   )
@@ -130,6 +139,9 @@ export default function App() {
             <Route path="/" element={<Overview />} />
             <Route path="/sources" element={<DataSources />} />
             <Route path="/matches" element={<Matches />} />
+            <Route path="/models" element={<Models />} />
+            <Route path="/scraper" element={<Scraper />} />
+            <Route path="/stake" element={<Stake />} />
             <Route path="/identity" element={<IdentityReview />} />
             {placeholders.map((item) => (
               <Route

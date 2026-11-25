@@ -32,6 +32,9 @@ Data (safe to re-run; unchanged files are skipped):
 .\.venv\Scripts\python -m backend.cli import-fdcuk                      # results + odds, 2015/16 to now (~25 min first time)
 .\.venv\Scripts\python -m backend.cli import-fdcuk --from 2026          # just refresh the current season
 .\.venv\Scripts\python -m backend.cli sync-api-football --season 2023   # 10 API-Football requests, then team matching
+.\.venv\Scripts\python -m backend.cli import-fixtures                   # upcoming matches (next few days); run daily
+.\.venv\Scripts\python -m backend.cli backtest                          # walk-forward test of all models (~5 min)
+.\.venv\Scripts\python -m backend.cli predict                           # predict upcoming matches
 .\.venv\Scripts\python -m backend.cli resolve-teams                     # re-run team matching
 .\.venv\Scripts\python -m backend.cli summary                           # what is in the database
 ```
@@ -50,11 +53,22 @@ npm --prefix frontend run build          # type-check + build the dashboard
 | `backend/cli.py` | Command line for imports and maintenance |
 | `backend/core/leagues.py` | The 10 tracked leagues and each provider's league ID |
 | `backend/ingestion/` | Importers: football-data.co.uk, API-Football |
+| `backend/models/` | Prediction models (Elo, Dixon-Coles, blend) and walk-forward backtest. **Never sees odds** |
+| `backend/evaluation/` | Scoring on real results; the only code that reads prices (as payouts) |
 | `backend/integrations/` | Provider adapters, rate limiter, raw payload storage |
 | `backend/identity/` | Name normalization and team matching across providers |
 | `backend/database/`, `alembic/` | SQLAlchemy models and migrations |
 | `frontend/` | React + Vite + Tailwind dashboard |
 | `tests/` | pytest suite |
+
+### Stake browser helper
+
+Stake's betting API sits behind Cloudflare, which only lets real browsers through, so bets are
+placed from **your own logged-in Stake tab** by a small Chrome extension in `extension/`
+(install steps in `extension/README.md`). The dashboard's **Stake** page has the switches
+(Learn mode, Execution; both off by default) and the approval queue. The app enforces the
+limits in `.env` (`STAKE_MAX_BET`, `STAKE_TEST_BUDGET`, `STAKE_MAX_BETS_PER_DAY`) before any
+bet is handed to the helper.
 
 ### Data notes
 
@@ -214,41 +228,62 @@ This is the part that makes multi-provider work possible. The domain model is al
 
 ## 5. The ML and maths stack
 
-"Crazy" here means *rigorous and layered*, not just big. Football outcomes are low-scoring and noisy, and bookmaker prices are already sharp. The models that work well combine solid statistical structure with careful feature engineering, and they are judged against the market.
+"Crazy" here means *rigorous and layered*, not just big. Football outcomes are low-scoring and noisy, so the models combine solid statistical structure with careful player-level feature engineering.
+
+### 5.0 The core rule: the model never learns from bookmaker odds
+
+Odds are shaped by bookmaker margins and by where the public puts its money (popular clubs, favourites, recent headlines). So **SportsAnalyzer forms its own opinion from football data only**:
+
+| Odds are **never** used for | Odds **are** used for |
+|---|---|
+| Model inputs (no odds, odds movement or implied probabilities as features) | The **price** of a bet: after the model has fixed its probability, the price decides whether the payout is worth it |
+| Blending or "shrinking" the model towards the market | **Stake size** (Kelly needs the payout) |
+| Deciding which matches look interesting | Reporting, e.g. a "market disagrees" diagnostic shown on the dashboard, never fed back into decisions |
+
+Why the price still matters: if the model gives a team a 50% chance, odds of 2.50 pay more than that risk is worth (a good bet) and odds of 1.60 pay less (a bad bet), even though the prediction is identical. Ignoring the price entirely would mean taking bad prices and losing to the bookmaker's margin.
+
+This is enforced in code: a test fails if any odds-derived column reaches a model's feature set. Without the market as a safety net, the model has to be well calibrated on its own, so bets also need a minimum edge **and** low model uncertainty (§5.5).
 
 ### 5.1 Layer 1: team-strength ratings
 - **Elo / pi-ratings** with home advantage and margin of victory, updated match by match.
 - **Dynamic attack and defence strengths**: a time-decayed Dixon-Coles style model, refitted regularly.
-- **xG-based ratings** where xG data exists (more stable than goals).
+- **xG-based ratings** where xG data exists (more stable than goals); shots and shots-on-target ratings for the second tiers, where xG is not available.
 
 ### 5.2 Layer 2: goals model (the core probabilistic engine)
-- **Dixon-Coles (bivariate Poisson with low-score correction)** with exponential time decay. It produces a full score-line probability matrix, from which all markets follow: 1X2, over/under, BTTS, Asian handicap, correct score.
-- Optionally a **Bayesian hierarchical model** (PyMC) for proper uncertainty, which helps a lot for promoted teams and small leagues.
+- **Dixon-Coles (bivariate Poisson with low-score correction)** with exponential time decay. It produces a full score-line probability matrix, from which all markets follow: 1X2, over/under, BTTS, correct score.
+- A **Bayesian hierarchical version** (PyMC) for proper uncertainty, which helps a lot for promoted teams and second tiers, and feeds the "low uncertainty" requirement for betting.
 
-### 5.3 Layer 3: gradient-boosted models on rich features
-LightGBM classifiers and regressors on point-in-time features:
-- Ratings and Dixon-Coles outputs from layers 1 and 2.
-- Form: rolling xG for and against, shots, goals and points over different windows.
-- **Availability:** importance-weighted sum of missing players (injuries and suspensions), expected-lineup strength, and lineup changes versus the usual XI.
-- Schedule: rest days, fixture congestion, travel distance, European midweek games.
-- Context: league position, motivation (title race, relegation, nothing to play for), derby flag, manager change recency.
-- **Market features:** opening odds, odds movement, implied probabilities. The market is the strongest single predictor, so the models learn *where it is wrong* rather than ignoring it.
+### 5.3 Layer 3: the player layer
+How a team plays **with and without** each player, and how players perform against the kind of opponent they face next.
 
-### 5.4 Layer 4: calibration and ensemble
-- Stack the layers with a meta-model (logistic regression or a small GBM).
-- **Calibrate** with isotonic regression or Platt scaling. Value betting needs *calibrated probabilities*, not just accuracy.
-- **Shrink towards the market:** blend the model probability with the de-margined market probability, with the blend weight learned out of sample. This avoids betting on the model's overconfident outliers.
+**Data (free, collected over days within quotas):**
+- **Understat** (top-5 first divisions, 2014/15 on): per-match lineups, minutes, xG, xA, shots and key passes for every player. Scraped slowly, cached, within the site's terms.
+- **API-Football** (all 10 leagues): lineups, substitutions, per-player match stats and ratings, injuries and suspensions. One request per fixture, so a quota-aware queue backfills about 90 fixtures a day; a full league-season takes about 4 days. The free plan's season limits apply.
+- Injury and team news from the Phase 2 scrapers.
 
-### 5.5 Pricing and value detection
-- Remove the bookmaker margin (power or Shin method) to get the market's fair probabilities.
-- **Edge = p_model × decimal_odds − 1.** Only bet when the edge is above a threshold *and* the model's uncertainty is small enough.
+**Models:**
+- **Player impact (with/without):** each match is split into segments between substitutions and red cards. A regularised regression (ridge / Bayesian *adjusted plus-minus*) learns each player's effect on the team's xG for and against per 90 minutes, controlling for teammates and opponents. Priors come from position and previous seasons, so new or rarely used players don't produce wild numbers.
+- **Lineup-adjusted strength:** a team's rating for a match is built from its **expected XI**. When a key player is injured, the team's attack or defence rating drops by that player's measured impact, not by a guess.
+- **Player vs opponent:** a player meets a specific club only about twice a season, which is far too little data to trust. So performance is modelled against **opponent style types** (below), shrunk towards the player's overall level: "how does this striker do against deep, low-block defences?"
+
+### 5.4 Layer 4: 3D team style maps
+- Every team-season, and a rolling recent-form window, becomes a **style vector**: tempo, shot volume and quality, xG for and against, set-piece share, directness, defensive line and pressing proxies, home/away splits.
+- These are reduced to **3 dimensions** (PCA, then UMAP) and clustered into **style types**.
+- The dashboard shows an interactive **3D map**: one point per team, trails showing how a team's style moved across seasons, colour by cluster, click a team for its page.
+- The clusters are also model inputs: team-vs-style results and player-vs-style performance (Layer 3).
+
+### 5.5 Layer 5: gradient boosting, calibration and the betting decision
+- **LightGBM** on point-in-time features: layer 1–4 outputs, form, availability (lineup-adjusted strength, missing-player impact), schedule (rest days, congestion, travel, European midweek games) and context (table position, motivation, derby, manager change). **No odds.**
+- **Calibrate** with isotonic regression on out-of-sample predictions. Value betting needs calibrated probabilities, not just accuracy.
+- **Bet only when** `edge = p_model × price − 1` exceeds a threshold **and** the Bayesian uncertainty interval for p_model also clears it. The price is Stake's at the moment of betting.
 
 ### 5.6 Validation (the part that decides whether any of this is real)
-- **Walk-forward backtesting** by season and matchweek, with no future information leaking in (point-in-time features).
-- Metrics: log loss, Brier score, ranked probability score, calibration curves, **ROI and yield on simulated bets, and closing line value (CLV)**. CLV, meaning whether we beat the closing price, is the most reliable early signal of a real edge.
-- A model only gets **promoted to live betting** after it beats the market's closing line over a meaningful sample in paper trading.
+- **Walk-forward backtesting** by season and matchweek, using only information available before kickoff.
+- **Primary metrics, judged on real results:** log loss, Brier score, ranked probability score, calibration curves, and **ROI at the prices actually available**.
+- **Secondary diagnostic:** closing line value (whether our price beat the closing price). It is reported, but it is not the yardstick the model is tuned on.
+- A model is **promoted to live betting** only after positive, well-calibrated paper-trading results over a meaningful sample.
 
-> Honest expectation: beating major-league 1X2 markets is very hard. Edges, if they exist, tend to sit in **smaller leagues, team news the market has not priced yet (injuries), and derivative markets** (totals, BTTS). The system is built to find out where you have an edge, and to show you clearly when you don't.
+> Honest expectation: beating bookmakers is hard, and a model that ignores the market must be well calibrated on its own. Edges, if they exist, tend to sit in **second tiers, team news not yet priced in (injuries, lineups), and totals/BTTS**. The system is built to find out where you have an edge, and to show you clearly when you don't.
 
 ---
 
@@ -325,7 +360,7 @@ Minimal and calm: a neutral palette, one accent colour, generous whitespace, a d
 | **Value bets** | The current opportunities ranked by edge × confidence, with approve/reject for `approve`-mode strategies. |
 | **Bet ledger** | Every bet: status, stake, odds taken vs closing odds, P&L, strategy, model version and a "why" panel. Filterable and exportable. |
 | **Strategies** | Create and edit strategies (type, bankroll, limits, mode), with a compounding simulator (Monte Carlo of bankroll paths) before enabling. |
-| **Models** | Backtest results, calibration plots, log loss and CLV over time, model version comparison, promote/demote. |
+| **Models** | Backtest results, calibration plots, log loss and ROI over time (CLV as a side diagnostic), model version comparison, promote/demote. |
 | **Team news** | The injury and suspension feed with source, confidence and estimated impact on the next match. |
 | **Data sources** | Provider health, quota used/remaining today, backfill progress, last sync, errors. |
 | **Identity review** | Unresolved and conflicting provider-to-canonical mappings, with approve/merge/reject. |
@@ -345,7 +380,7 @@ Live updates (new odds, bet placed, bet settled) arrive over a WebSocket.
 | **3. Models** | Feature store; Elo + Dixon-Coles; LightGBM; calibration; walk-forward backtester with historical odds; MLflow. |
 | **4. Strategy + paper trading** | Strategy engine, risk controls, `PaperBroker`, ledger, settlement job. |
 | **5. Dashboard** | FastAPI endpoints + React UI for every page in §8. |
-| **6. Stake** | Read-only `StakeBroker` → `approve`-mode placement → `auto` mode only after the model shows positive CLV in paper trading. |
+| **6. Stake** | Read-only `StakeBroker` → `approve`-mode placement → `auto` mode only after positive, well-calibrated paper-trading results. |
 
 ---
 
@@ -356,7 +391,7 @@ Live updates (new odds, bet placed, bet settled) arrive over a WebSocket.
 | Bookmaker | **Stake**, using your **INR wallet**. All amounts, limits and P&L are stored and shown in INR. |
 | Leagues (phase 1) | **Top 5 + second tiers:** Premier League, Championship, La Liga, Segunda División, Serie A, Serie B, Bundesliga, 2. Bundesliga, Ligue 1, Ligue 2. |
 | Markets | **1X2, Over/Under goals, BTTS.** All three are derived from the Dixon-Coles score matrix, plus the GBM layer. Asian handicap is out of scope for now. |
-| Automation | **Paper → approve → auto.** Each strategy starts in paper mode. Approve mode unlocks once the Stake broker is verified. Auto mode unlocks only after positive closing line value over a minimum sample of paper bets. |
+| Automation | **Paper → approve → auto.** Each strategy starts in paper mode. Approve mode unlocks once the Stake broker is verified. Auto mode unlocks only after positive, well-calibrated paper-trading results over a minimum sample. **Models never use bookmaker odds as inputs** (§5.0). |
 | Default risk limits | **Conservative:** max 2% of strategy bankroll per bet, 0.25× Kelly, auto-pause at 20% drawdown from peak. Each strategy can override these in the dashboard. Hard caps stay in config. |
 | Frontend | **React + Vite + TypeScript + Tailwind**, shadcn/ui, Recharts, TanStack Query. |
 | Database | **PostgreSQL via Docker Compose** (`docker compose up -d db`), migrated with Alembic. |
