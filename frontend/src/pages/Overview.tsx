@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
-import { LineChart } from 'lucide-react'
-import { Badge, Card, CardHeader, EmptyState, PageHeader, Stat, StatusDot } from '../components/ui'
+import StrategyControls from '../components/StrategyControls'
+import { Badge, Card, CardHeader, PageHeader, Stat, StatusDot } from '../components/ui'
 import { api } from '../lib/api'
 
 const ROADMAP = [
@@ -8,7 +8,7 @@ const ROADMAP = [
   { phase: 1, title: 'Data', detail: 'Canonical teams and matches, identity matching, more providers, backfill planner', done: true },
   { phase: 2, title: 'News', detail: 'Injury scrapers and player importance' },
   { phase: 3, title: 'Models', detail: 'Ratings, Dixon-Coles, LightGBM, backtesting' },
-  { phase: 4, title: 'Strategy + paper trading', detail: 'Staking, compounding, risk limits, bet ledger' },
+  { phase: 4, title: 'Strategy + paper trading', detail: 'Staking, compounding, risk limits, bet ledger', done: true },
   { phase: 5, title: 'Dashboard', detail: 'Every page filled with live data' },
   { phase: 6, title: 'Stake', detail: 'Read-only, then approve mode, then auto' },
 ]
@@ -16,6 +16,13 @@ const ROADMAP = [
 export default function Overview() {
   const providers = useQuery({ queryKey: ['providers'], queryFn: api.providers })
   const summary = useQuery({ queryKey: ['summary'], queryFn: api.summary })
+  const strategies = useQuery({ queryKey: ['strategies'], queryFn: api.strategies, refetchInterval: 10000 })
+  const live = (strategies.data ?? []).filter((x) => x.enabled)
+  const pot = live.reduce((t, x) => t + x.bankroll.pot, 0)
+  const banked = live.reduce((t, x) => t + x.bankroll.banked, 0)
+  const pnl = live.reduce((t, x) => t + x.bankroll.profit, 0)
+  const openBets = live.reduce((t, x) => t + (x.bets.open ?? 0), 0)
+  const rs = (v: number) => `₹${v.toLocaleString('en-IN', { maximumFractionDigits: 0 })}`
   const n = (v: number | undefined) => (v === undefined ? '…' : v.toLocaleString('en-IN'))
   const configured = providers.data?.filter((p) => p.configured).length ?? 0
   const observations = providers.data?.reduce((sum, p) => sum + p.observations, 0) ?? 0
@@ -29,21 +36,16 @@ export default function Overview() {
       />
 
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-        <Stat label="Bankroll" value="₹0" hint="No strategies yet" />
-        <Stat label="P&L · 30d" value="—" hint="No settled bets" />
-        <Stat label="Yield" value="—" hint="Profit ÷ total staked" />
-        <Stat label="Closing line value" value="—" hint="Avg. odds taken vs close" />
+        <Stat label="Bankroll (active strategies)" value={live.length ? rs(pot) : '—'} hint={live.length ? `${live.length} switched on` : 'No strategy switched on'} />
+        <Stat label="Banked" value={live.length ? rs(banked) : '—'} hint="Winnings not reinvested" />
+        <Stat label="P&L" value={live.length ? `${pnl >= 0 ? '+' : ''}${rs(pnl)}` : '—'} hint="Settled bets, all modes" />
+        <Stat label="Open bets" value={String(openBets)} hint="Waiting for results" />
       </div>
 
       <div className="mt-6 grid gap-6 lg:grid-cols-3">
-        <Card className="lg:col-span-2">
-          <CardHeader title="Bankroll" aside={<span className="text-xs text-zinc-500">INR</span>} />
-          <EmptyState
-            icon={<LineChart className="size-6" />}
-            title="No bankroll history yet"
-            body="Once paper trading starts in Phase 4, the bankroll curve for every strategy appears here."
-          />
-        </Card>
+        <div className="lg:col-span-2">
+          <StrategyControls />
+        </div>
 
         <Card>
           <CardHeader title="Data" />

@@ -147,6 +147,28 @@ export type StakeOrder = {
   approved_at: string | null; sent_at: string | null; finished_at: string | null
 }
 
+export type StrategyRow = {
+  id: number; name: string; kind: 'flat' | 'kelly'; mode: 'paper' | 'approve' | 'auto'; enabled: boolean
+  paused_reason: string | null; model: string; bankroll_start: number; reinvest_pct: number; stake_pct: number
+  kelly_fraction: number; max_stake: number; min_edge: number; min_price: number; max_price: number
+  markets: string[]; leagues: string[]; max_bets_per_day: number; drawdown_stop_pct: number
+  bankroll: { pot: number; available: number; banked: number; open_stakes: number; profit: number;
+              drawdown_pct: number; roi: number | null }
+  bets: Record<string, number>
+}
+export type LedgerBet = {
+  id: number; strategy: string; match: string; date: string; kickoff_at: string | null; score: string | null
+  market: string; selection: string; mode: string; p_model: number; price: number; price_source: string
+  edge: number; stake: number; status: string; profit: number | null; order_status: string | null
+  created_at: string; settled_at: string | null
+}
+export type Automation = {
+  started_at?: string; next_cycle_at?: string
+  last_cycle?: { at: string; settled: number; strategies: Record<string, { created?: number; skipped?: string }> }
+  last_refresh?: { at: string; fixtures: number; predicted: Record<string, number> }
+  last_error?: { at: string; error: string } | null
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, init)
   if (!response.ok) {
@@ -155,6 +177,13 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   }
   return response.json() as Promise<T>
 }
+
+const patch = <T>(path: string, body: unknown) =>
+  request<T>(path, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', 'X-Requested-By': 'sportsanalyzer' },
+    body: JSON.stringify(body),
+  })
 
 const post = <T>(path: string, body?: unknown) =>
   request<T>(path, {
@@ -193,6 +222,12 @@ export const api = {
   stakeCreateOrder: (outcome_id: string, amount: number) => post<StakeOrder>('/api/stake/orders', { outcome_id, amount }),
   stakeApprove: (id: number) => post(`/api/stake/orders/${id}/approve`),
   stakeReject: (id: number) => post(`/api/stake/orders/${id}/reject`),
+  strategies: () => request<StrategyRow[]>('/api/strategies'),
+  updateStrategy: (id: number, body: Partial<StrategyRow> & { resume?: boolean; confirm_real_money?: boolean }) =>
+    patch<StrategyRow>(`/api/strategies/${id}`, body),
+  runStrategies: () => post('/api/strategies/run'),
+  ledger: (status = '') => request<LedgerBet[]>(`/api/strategies/bets?limit=200${status ? `&status=${status}` : ''}`),
+  automation: () => request<Automation>('/api/strategies/automation'),
   identityReview: () => request<IdentityReview>('/api/identity/review'),
   resolveMapping: (id: number, teamId: number) => post(`/api/identity/${id}/resolve`, { team_id: teamId }),
   rejectMapping: (id: number) => post(`/api/identity/${id}/reject`),

@@ -35,8 +35,8 @@ from backend.execution.guardrails import (
     GuardrailError,
     Limits,
     check_dispatch,
-    check_new_order,
 )
+from backend.execution.orders import create_stake_order
 from backend.execution.stake_link import link_stake_fixtures, store_parsed
 from backend.execution.stake_parse import parse_payload
 from backend.execution.stake_requests import (
@@ -189,34 +189,15 @@ class NewOrder(BaseModel):
 
 @router.post("/orders")
 async def create_order(body: NewOrder) -> dict[str, Any]:
-    limits = Limits.from_env()
-    try:
-        check_new_order(body.amount, limits.currency, limits)
-    except GuardrailError as exc:
-        raise HTTPException(400, str(exc)) from exc
     async with AsyncSessionFactory() as session:
         outcome = (await session.execute(select(StakeOutcome).where(
             StakeOutcome.outcome_id == body.outcome_id))).scalar_one_or_none()
         if outcome is None:
             raise HTTPException(404, "Unknown Stake outcome. Open the match on Stake with Learn mode on first.")
-        op = await _bet_operation(session)
-        preview, detail = None, None
-        if op is None:
-            detail = "Waiting: the bet request hasn't been learned yet (place one manual bet with Learn mode on)."
-        else:
-            try:
-                preview = build_bet_request(op.operation_name, op.query, op.sample_variables, outcome.outcome_id,
-                                            body.amount, limits.currency)["variables"]
-            except TemplateError as exc:
-                detail = str(exc)
-        order = StakeOrder(
-            source="manual_test", outcome_id=outcome.outcome_id,
-            description=f"{outcome.fixture_name or '?'} · {outcome.market_name or '?'}"
-                        f"{' ' + outcome.specifiers if outcome.specifiers else ''} · {outcome.name}",
-            amount=body.amount, currency=limits.currency, min_price=body.min_price or None,
-            status="pending_approval", status_detail=detail, request_preview=preview,
-        )
-        session.add(order)
+        try:
+            order = await create_stake_order(session, outcome, body.amount, source="manual_test", auto_approve=False)
+        except GuardrailError as exc:
+            raise HTTPException(400, str(exc)) from exc
         await session.commit()
         return _order_json(order)
 

@@ -6,7 +6,7 @@ A personal, locally run football analytics and betting system. It pulls in data 
 
 ---
 
-## Project handover (last updated 2026-11-25)
+## Project handover (last updated 2026-11-25, evening)
 
 ### What the owner wants (condensed)
 - A **local** football analysis + betting system for **themselves**: the top-5 European leagues **and their second tiers** (ENG1/2, ESP1/2, ITA1/2, GER1/2, FRA1/2). Markets: **1X2, Over/Under 2.5, BTTS**.
@@ -14,6 +14,8 @@ A personal, locally run football analytics and betting system. It pulls in data 
 - **Player-level analysis:** how teams play with and without each player; how players do against the kind of opponent they face next; **3D team style maps**.
 - **"Crazy" ML** that **must never base predictions on bookmaker odds** (odds are only the price/payout). See §5.0. This is the owner's most important rule.
 - Bets placed on **Stake** (INR wallet, ₹500 deposited) through automation, tested with **₹1 bets**. **End goal: fully automatic betting** with **compounding**. On the Overview page the owner sets **which strategies run, the % of winnings reinvested**, and each strategy's mode **paper / approve / auto**.
+- **Real, trained machine-learning models** (not just statistical baselines), trained on **all** collected data **including the scraped player data**, with **visible training progress** on the dashboard. Separate models per league are fine, but **teams from different leagues meet** (European cups, domestic cups, promotion/relegation), so strength must be comparable **across leagues**. Use the laptop's **GPU (NVIDIA RTX 4050 Laptop, 6 GB, CUDA driver 610)** for training.
+- **Individual player information** in the app: player pages with minutes, stats, impact with/without, form.
 - A polished, clean, minimal dark dashboard. The owner wants to **see the commands that run** (Terminal tabs) and **check the UI regularly**.
 - The owner is new to Claude Code; explain plainly. **Keep this README current** so a fresh chat can continue.
 
@@ -37,8 +39,11 @@ A personal, locally run football analytics and betting system. It pulls in data 
 | Scrapy ESPN spider: lineups, substitution minutes, events, team stats; Scraper page | ✅; **full backfill 2019 to now running (run #7, about 20 h)** | `backend/scraping/` |
 | Stake Chrome extension (balance, Learn mode, places approved bets) | ✅; 2 real ₹1 bets placed automatically after approval | `extension/`, Stake page |
 | Stake fixtures parsed and linked to our matches | ✅ (21/30 linked on first capture; La Liga waits for the backfill) | `backend/execution/stake_parse.py`, `stake_link.py` |
-| Strategies, compounding, paper/approve/auto, Overview controls | 🚧 **in progress** | `backend/strategies/` (tables `strategies`, `strategy_bets` exist) |
-| Player impact model (with/without), player vs opponent style | ⏳ after the backfill finishes | |
+| Strategies, compounding (reinvest %), paper/approve/auto, Overview controls, Bet ledger | ✅ (3 starter strategies, all off and in paper mode) | `backend/strategies/`, `backend/api/routes_strategies.py`, Overview + Bet ledger pages |
+| Automation loop in the API: every 15 min settle + strategy bets; every 6 h fixtures + predictions | ✅ | `backend/automation.py` |
+| **Trained ML models** (GPU gradient boosting + neural net) with training-progress page | ⏳ **next** | |
+| Cross-league strength (European cups / domestic cups data) | ⏳ | |
+| Player pages + player impact model (with/without), player vs opponent style | ⏳ after the backfill finishes | |
 | 3D team style maps | ⏳ | |
 | Injury/news spiders | ⏳ | |
 
@@ -51,10 +56,11 @@ A personal, locally run football analytics and betting system. It pulls in data 
 - 35 ESPN teams (mostly Spain) stay unmatched until the backfill provides evidence; they show on Identity review.
 
 ### Next steps (in order)
-1. Finish **strategies + paper trading + Overview controls** (reinvest %, strategy picker, paper/approve/auto), plus a background loop that refreshes fixtures and predictions, settles bets and places strategy bets.
-2. When the backfill completes: **player impact model** (regularised adjusted plus-minus on goals/shots per 90), lineup-adjusted team strength, then **3D style maps** (PCA/UMAP + clusters, react-three-fiber).
-3. **Injury/news spiders** (Scrapy) feeding availability features.
-4. Retrain and backtest with player features; compare to the market; only then consider auto mode with real money.
+1. **ML training system:** a `training_runs` table with live progress (epoch, loss, validation metrics) and a **Training** page; GPU via PyTorch CUDA and LightGBM/XGBoost GPU. Models: gradient-boosted trees and a neural net on point-in-time features (ratings, form, xG proxies, schedule, **player availability/impact**), with no odds as inputs. Walk-forward validation as in §5.6. Register each trained model so strategies can pick it.
+2. **Cross-league strength:** add European competitions and domestic cups to the ESPN spider so teams from different leagues are linked by real matches; fit one global rating with league offsets, plus per-league fine-tuning.
+3. **Player layer** (when the backfill completes): player pages, regularised adjusted plus-minus (impact per 90 with/without), lineup-adjusted strength, player vs opponent-style; then the **3D style maps**.
+4. **Injury/news spiders** (Scrapy) feeding availability features.
+5. Retrain, backtest, paper-trade; compare with the market; only then consider auto mode with real money.
 
 ### Tools and stack
 Python 3.12 (`.venv`), FastAPI + uvicorn, SQLAlchemy 2 (async with asyncpg; psycopg for Scrapy), Alembic, PostgreSQL 17 in Docker, pandas/numpy/scipy/scikit-learn, Scrapy, httpx/aiohttp; React 19 + Vite + TypeScript + Tailwind v4 + TanStack Query + lucide icons; a Chrome MV3 extension; pytest + ruff. GitHub: `nirvaannair/SportsAnalyzer` (work happens on branch `claude/football-betting-ml-analyzer-e7dd8d` and is merged through PRs; `gh` is at `C:\Program Files\GitHub CLI\gh.exe`, not on PATH).
@@ -66,7 +72,7 @@ Python 3.12 (`.venv`), FastAPI + uvicorn, SQLAlchemy 2 (async with asyncpg; psyc
 4. For Stake: Chrome with the **SportsAnalyzer Stake Helper** extension loaded from `extension/` and a logged-in stake.com tab.
 
 ### Dashboard pages
-Overview · Matches (model probabilities vs prices) · Stake (helper, balance, switches, approvals, outcomes) · Models (backtest metrics, calibration, simulated bets) · Data sources · Scraper (runs, live log, items) · Identity review. Pages marked P2–P4 in the sidebar are not built yet.
+Overview (strategy controls: on/off, paper/approve/auto, reinvest %) · Bet ledger · Matches (model probabilities vs prices) · Stake (helper, balance, switches, approvals, outcomes) · Models (backtest metrics, calibration, simulated bets) · Data sources · Scraper (runs, live log, items) · Identity review. Pages marked P2–P4 in the sidebar are not built yet.
 
 ---
 
