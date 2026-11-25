@@ -5,7 +5,6 @@ from datetime import datetime
 from enum import StrEnum
 from uuid import UUID
 
-from .canonical import CanonicalEntityStatus
 from .provider_entities import (
     IdentityEntityType,
     ProviderEntityKey,
@@ -154,7 +153,7 @@ class ProviderCanonicalMapping:
         resolver_version: str | None = None,
         source_candidate_id: UUID | None = None,
         attributes: dict[str, str] | None = None,
-    ) -> "ProviderCanonicalMapping":
+    ) -> ProviderCanonicalMapping:
         """
         Create a provider-to-canonical mapping.
 
@@ -197,7 +196,7 @@ class ProviderCanonicalMapping:
         self,
         *,
         updated_at: datetime | None = None,
-    ) -> "ProviderCanonicalMapping":
+    ) -> ProviderCanonicalMapping:
         """
         Return an active version of this mapping.
         """
@@ -210,7 +209,7 @@ class ProviderCanonicalMapping:
         self,
         *,
         updated_at: datetime | None = None,
-    ) -> "ProviderCanonicalMapping":
+    ) -> ProviderCanonicalMapping:
         """
         Return a rejected version of this mapping.
         """
@@ -223,7 +222,7 @@ class ProviderCanonicalMapping:
         self,
         *,
         updated_at: datetime | None = None,
-    ) -> "ProviderCanonicalMapping":
+    ) -> ProviderCanonicalMapping:
         """
         Return a superseded version of this mapping.
         """
@@ -237,7 +236,7 @@ class ProviderCanonicalMapping:
         status: MappingStatus,
         *,
         updated_at: datetime | None,
-    ) -> "ProviderCanonicalMapping":
+    ) -> ProviderCanonicalMapping:
         """
         Create an immutable copy with a new mapping status.
         """

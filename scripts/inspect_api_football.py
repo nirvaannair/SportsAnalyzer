@@ -11,7 +11,6 @@ from typing import Any
 import aiohttp
 from dotenv import load_dotenv
 
-
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 OUTPUT_DIRECTORY = (

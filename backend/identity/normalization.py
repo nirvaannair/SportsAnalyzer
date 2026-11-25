@@ -2,9 +2,8 @@ from __future__ import annotations
 
 import re
 import unicodedata
+from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Iterable
-
 
 _WHITESPACE_PATTERN = re.compile(r"\s+")
 _NON_ALPHANUMERIC_PATTERN = re.compile(r"[^\w\s]", flags=re.UNICODE)

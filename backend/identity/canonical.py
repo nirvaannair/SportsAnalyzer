@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from enum import StrEnum
-from typing import Any, Mapping
+from typing import Any
 from uuid import UUID, uuid4
 
 from .provider_entities import IdentityEntityType
@@ -87,7 +88,7 @@ class CanonicalEntity:
         entity_id: UUID | None = None,
         created_at: datetime | None = None,
         updated_at: datetime | None = None,
-    ) -> "CanonicalEntity":
+    ) -> CanonicalEntity:
         """
         Create a new canonical entity.
 
@@ -121,7 +122,7 @@ class CanonicalEntity:
         aliases: tuple[str, ...] | None = None,
         attributes: Mapping[str, Any] | None = None,
         updated_at: datetime | None = None,
-    ) -> "CanonicalEntity":
+    ) -> CanonicalEntity:
         """
         Create an updated immutable version of the canonical entity.
         """
@@ -212,7 +213,7 @@ class CanonicalTeam:
         creation_date: date | None = None,
         attributes: Mapping[str, Any] | None = None,
         team_id: UUID | None = None,
-    ) -> "CanonicalTeam":
+    ) -> CanonicalTeam:
         """
         Create a canonical team with an internally generated UUID.
         """
@@ -278,7 +279,7 @@ class CanonicalPlayer:
         aliases: tuple[str, ...] = (),
         attributes: Mapping[str, Any] | None = None,
         player_id: UUID | None = None,
-    ) -> "CanonicalPlayer":
+    ) -> CanonicalPlayer:
         """
         Create a canonical player with an internally generated UUID.
         """
@@ -342,7 +343,7 @@ class CanonicalCompetition:
         aliases: tuple[str, ...] = (),
         attributes: Mapping[str, Any] | None = None,
         competition_id: UUID | None = None,
-    ) -> "CanonicalCompetition":
+    ) -> CanonicalCompetition:
         """
         Create a canonical competition with an internal UUID.
         """
@@ -401,7 +402,7 @@ class CanonicalSeason:
         end_date: date | None = None,
         attributes: Mapping[str, Any] | None = None,
         season_id: UUID | None = None,
-    ) -> "CanonicalSeason":
+    ) -> CanonicalSeason:
         """
         Create a canonical season linked to a canonical competition.
         """
