@@ -11,7 +11,7 @@ Runs after every crawl (and via `python -m backend.cli load-scraped`). Safe to r
 from __future__ import annotations
 
 from collections import defaultdict
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import delete, select
@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.core.leagues import LEAGUES_BY_CODE
 from backend.database.models import (
+    Match,
     MatchEvent,
     MatchPlayer,
     Player,
@@ -29,6 +30,8 @@ from backend.database.models import (
 )
 from backend.identity.mappings import MappingStatus, ResolutionMethod
 from backend.identity.team_resolver import link_fixtures_to_matches, resolve_unresolved_teams
+from backend.ingestion.catalog import ensure_competitions, ensure_season
+from backend.ingestion.fdcuk import season_start_for
 
 PROVIDER = "espn"
 SPIDER = "espn_matches"
@@ -190,10 +193,51 @@ async def load_match_details(session: AsyncSession, limit: int = 5000) -> dict[s
     return {"loaded": loaded, "waiting_for_links": waiting}
 
 
+async def create_scheduled_matches(session: AsyncSession, days_back: int = 2) -> int:
+    """Use ESPN's schedule to add upcoming matches we don't have yet (both teams must be linked).
+
+    football-data.co.uk only lists the next few days; ESPN lists weeks ahead. Results for
+    these matches later arrive from football-data.co.uk on the same row (same teams + date).
+    """
+    team_map = dict((await session.execute(
+        select(ProviderEntityMapping.provider_entity_id, ProviderEntityMapping.canonical_id).where(
+            ProviderEntityMapping.provider_name == PROVIDER, ProviderEntityMapping.entity_type == "team",
+            ProviderEntityMapping.status == MappingStatus.ACTIVE.value)
+    )).all())
+    today = date.today()
+    fixtures = (await session.execute(
+        select(ScrapedItem.data).where(ScrapedItem.spider == SPIDER, ScrapedItem.item_type == "fixture")
+    )).scalars().all()
+    competition_ids = await ensure_competitions(session)
+    created = 0
+    for f in fixtures:
+        if f.get("completed") or not f.get("date"):
+            continue
+        day = date.fromisoformat(f["date"])
+        if day < today - timedelta(days=days_back):
+            continue
+        home, away = team_map.get(f["home"]["id"]), team_map.get(f["away"]["id"])
+        if home is None or away is None:
+            continue
+        exists = (await session.execute(select(Match.id).where(
+            Match.home_team_id == home, Match.away_team_id == away,
+            Match.match_date.between(day - timedelta(days=2), day + timedelta(days=2))))).first()
+        if exists:
+            continue
+        season_id = await ensure_season(session, competition_ids[f["league"]], season_start_for(day))
+        kickoff = datetime.fromisoformat(f["kickoff"].replace("Z", "+00:00")) if f.get("kickoff") else None
+        session.add(Match(competition_id=competition_ids[f["league"]], season_id=season_id, match_date=day,
+                          kickoff_at=kickoff, home_team_id=home, away_team_id=away, status="scheduled"))
+        created += 1
+    await session.flush()
+    return created
+
+
 async def load_espn(session: AsyncSession) -> dict[str, Any]:
     teams = await register_espn_teams_and_matches(session)
     resolution = await resolve_unresolved_teams(session)
+    scheduled = await create_scheduled_matches(session)
     linked = await link_fixtures_to_matches(session, provider=PROVIDER)
     details = await load_match_details(session)
-    return {"espn_teams": teams, "teams_resolved": resolution["resolved"],
+    return {"espn_teams": teams, "teams_resolved": resolution["resolved"], "upcoming_matches_added": scheduled,
             "teams_to_review": resolution["review"], "matches_linked": linked, **details}

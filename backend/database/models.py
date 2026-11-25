@@ -492,6 +492,10 @@ class StakeOutcome(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     outcome_id: Mapped[str] = mapped_column(String(128), unique=True, nullable=False)
+    stake_fixture_id: Mapped[str | None] = mapped_column(String(64), index=True)
+    market_code: Mapped[str | None] = mapped_column(String(16))  # Betradar market id: 1=1x2, 18=total, 29=BTTS
+    specifiers: Mapped[str | None] = mapped_column(String(64))  # e.g. "total=2.5"
+    selection: Mapped[str | None] = mapped_column(String(16))  # home draw away over under yes no
     fixture_name: Mapped[str | None] = mapped_column(String(200))
     market_name: Mapped[str | None] = mapped_column(String(200))
     name: Mapped[str] = mapped_column(String(200), nullable=False)
@@ -532,3 +536,26 @@ class StakeOrder(Base):
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     __table_args__ = (Index("ix_stake_orders_status", "status", "created_at"),)
+
+
+class StakeFixture(Base):
+    """A football match as Stake lists it, linked to our canonical match when possible."""
+
+    __tablename__ = "stake_fixtures"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)  # Stake fixture id
+    slug: Mapped[str | None] = mapped_column(String(200))
+    ext_id: Mapped[str | None] = mapped_column(String(64))  # e.g. sr:match:72221418
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    start_time: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    home_name: Mapped[str | None] = mapped_column(String(120))
+    away_name: Mapped[str | None] = mapped_column(String(120))
+    tournament: Mapped[str | None] = mapped_column(String(120))
+    country: Mapped[str | None] = mapped_column(String(64))
+    sport: Mapped[str | None] = mapped_column(String(32))
+    league_code: Mapped[str | None] = mapped_column(String(16))  # our league, if tracked
+    match_id: Mapped[int | None] = mapped_column(ForeignKey("matches.id", ondelete="SET NULL"))
+    link_detail: Mapped[str | None] = mapped_column(String(200))
+    seen_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )

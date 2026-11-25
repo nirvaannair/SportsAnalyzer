@@ -68,7 +68,12 @@ export default function Stake() {
   const status = useQuery({ queryKey: ['stake', 'status'], queryFn: api.stakeStatus, refetchInterval: 3000 })
   const orders = useQuery({ queryKey: ['stake', 'orders'], queryFn: api.stakeOrders, refetchInterval: 3000 })
   const [q, setQ] = useState('')
-  const outcomes = useQuery({ queryKey: ['stake', 'outcomes', q], queryFn: () => api.stakeOutcomes(q), refetchInterval: 5000 })
+  const [allMarkets, setAllMarkets] = useState(false)
+  const outcomes = useQuery({
+    queryKey: ['stake', 'outcomes', q, allMarkets],
+    queryFn: () => api.stakeOutcomes(q, !allMarkets),
+    refetchInterval: 5000,
+  })
   const settings = useMutation({
     mutationFn: api.stakeSettings,
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['stake'] }),
@@ -135,6 +140,14 @@ export default function Stake() {
                   The helper copies the shape of Stake's requests and the markets on pages you open. To teach it how
                   betting works, place <b>one ₹1 bet by hand</b> on Stake while this is on.
                 </p>
+                {s?.learn_mode && h?.connected && (
+                  <div className="mt-2 text-xs text-zinc-500 dark:text-zinc-400">
+                    {h.hook
+                      ? `Listener: saw ${h.hook.fetchSeen + h.hook.xhrSeen} Stake requests in this tab · learned ${h.hook.captured}` +
+                        (h.hook.unreadable ? ` · ${h.hook.unreadable} unreadable` : '')
+                      : 'Listener not reporting. Reload the extension, then the Stake tab.'}
+                  </div>
+                )}
                 <div className="mt-2 text-xs">
                   {s?.bet_request_learned
                     ? <span className="text-emerald-600 dark:text-emerald-400">✓ Bet request learned ({s.bet_operation})</span>
@@ -174,10 +187,15 @@ export default function Stake() {
         <CardHeader
           title="Outcomes seen on Stake"
           aside={
-            <label className="flex items-center gap-2 rounded-lg border border-zinc-200 px-2 py-1 text-xs dark:border-zinc-800">
-              <Search className="size-3.5 text-zinc-400" />
-              <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Team or market" className="w-36 bg-transparent outline-none" />
-            </label>
+            <div className="flex items-center gap-3">
+              <label className="flex items-center gap-1.5 text-xs text-zinc-500">
+                <input type="checkbox" checked={allMarkets} onChange={(e) => setAllMarkets(e.target.checked)} /> All markets &amp; sports
+              </label>
+              <label className="flex items-center gap-2 rounded-lg border border-zinc-200 px-2 py-1 text-xs dark:border-zinc-800">
+                <Search className="size-3.5 text-zinc-400" />
+                <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Team or market" className="w-36 bg-transparent outline-none" />
+              </label>
+            </div>
           }
         />
         <p className="px-5 pt-3 text-xs text-zinc-500 dark:text-zinc-400">
@@ -193,6 +211,7 @@ export default function Stake() {
               <thead>
                 <tr className="text-left text-xs uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
                   <th className="px-5 py-2 font-medium">Match</th>
+                  <th className="px-3 py-2 font-medium">Kickoff</th>
                   <th className="px-3 py-2 font-medium">Market</th>
                   <th className="px-3 py-2 font-medium">Outcome</th>
                   <th className="px-3 py-2 text-right font-medium">Price</th>
@@ -202,13 +221,22 @@ export default function Stake() {
               <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
                 {(outcomes.data ?? []).map((o) => (
                   <tr key={o.outcome_id}>
-                    <td className="px-5 py-2">{o.fixture ?? '—'}</td>
-                    <td className="px-3 py-2 text-zinc-500 dark:text-zinc-400">{o.market ?? '—'}</td>
+                    <td className="px-5 py-2">
+                      <div className="flex items-center gap-2">
+                        {o.league && <Badge>{o.league}</Badge>}
+                        <span>{o.fixture ?? '—'}</span>
+                        {o.match_id && <span title="Linked to our match: predictions can be compared" className="text-emerald-600 dark:text-emerald-400">●</span>}
+                      </div>
+                    </td>
+                    <td className="tabular whitespace-nowrap px-3 py-2 text-zinc-500 dark:text-zinc-400">
+                      {o.start_time ? new Date(o.start_time).toLocaleString('en-IN', { weekday: 'short', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : '—'}
+                    </td>
+                    <td className="whitespace-nowrap px-3 py-2 text-zinc-500 dark:text-zinc-400">{o.market ?? "—"}</td>
                     <td className="px-3 py-2 font-medium">{o.name}</td>
                     <td className="tabular px-3 py-2 text-right">{o.price?.toFixed(2) ?? '—'}</td>
                     <td className="px-5 py-2 text-right">
                       <button onClick={() => create.mutate(o.outcome_id)} disabled={create.isPending || o.active === false}
-                        className="rounded-md border border-zinc-200 px-2.5 py-1 text-xs hover:bg-zinc-50 disabled:opacity-40 dark:border-zinc-800 dark:hover:bg-zinc-800">
+                        className="whitespace-nowrap rounded-md border border-zinc-200 px-2.5 py-1 text-xs hover:bg-zinc-50 disabled:opacity-40 dark:border-zinc-800 dark:hover:bg-zinc-800">
                         {rupees(s?.limits.max_bet ?? 1)} test bet
                       </button>
                     </td>

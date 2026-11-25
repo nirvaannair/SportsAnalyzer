@@ -14,6 +14,7 @@ from __future__ import annotations
 import os
 from datetime import UTC, datetime, timedelta
 from typing import Any
+from uuid import uuid4
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
@@ -22,7 +23,13 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.database.engine import AsyncSessionFactory
-from backend.database.models import AppSetting, StakeOperation, StakeOrder, StakeOutcome
+from backend.database.models import (
+    AppSetting,
+    StakeFixture,
+    StakeOperation,
+    StakeOrder,
+    StakeOutcome,
+)
 from backend.execution.guardrails import (
     Exposure,
     GuardrailError,
@@ -30,13 +37,18 @@ from backend.execution.guardrails import (
     check_dispatch,
     check_new_order,
 )
+from backend.execution.stake_link import link_stake_fixtures, store_parsed
+from backend.execution.stake_parse import parse_payload
 from backend.execution.stake_requests import (
     TemplateError,
     bet_result,
     build_bet_request,
-    extract_outcomes,
+    describe_operation,
     is_bet_mutation,
 )
+from backend.integrations.base import ProviderRequestContext
+from backend.integrations.postgres_raw_repository import PostgresRawPayloadRepository
+from backend.integrations.raw import RawPayload
 
 router = APIRouter(prefix="/api/stake")
 
@@ -132,16 +144,26 @@ async def settings(body: SettingsBody) -> dict[str, Any]:
 
 
 @router.get("/outcomes")
-async def outcomes(q: str = "", limit: int = 60) -> list[dict[str, Any]]:
+async def outcomes(q: str = "", main_markets: bool = True, limit: int = 120) -> list[dict[str, Any]]:
+    """Outcomes seen on Stake, for matches in our leagues first (1X2 / totals / BTTS by default)."""
     async with AsyncSessionFactory() as session:
-        query = select(StakeOutcome).order_by(StakeOutcome.seen_at.desc()).limit(limit)
+        query = (select(StakeOutcome, StakeFixture)
+                 .join(StakeFixture, StakeFixture.id == StakeOutcome.stake_fixture_id, isouter=True)
+                 .order_by(StakeFixture.league_code.is_(None), StakeFixture.start_time, StakeOutcome.market_code,
+                           StakeOutcome.specifiers, StakeOutcome.id)
+                 .limit(limit))
+        if main_markets:
+            query = query.where(StakeOutcome.selection.is_not(None), StakeFixture.league_code.is_not(None),
+                                (StakeOutcome.market_code != "18") | (StakeOutcome.specifiers == "total=2.5"))
         if q:
             like = f"%{q}%"
             query = query.where(StakeOutcome.fixture_name.ilike(like) | StakeOutcome.name.ilike(like)
                                 | StakeOutcome.market_name.ilike(like))
-        rows = (await session.execute(query)).scalars().all()
-    return [{"outcome_id": r.outcome_id, "fixture": r.fixture_name, "market": r.market_name, "name": r.name,
-             "price": r.price, "active": r.active, "seen_at": r.seen_at} for r in rows]
+        rows = (await session.execute(query)).all()
+    return [{"outcome_id": o.outcome_id, "fixture": o.fixture_name, "market": o.market_name, "name": o.name,
+             "selection": o.selection, "price": o.price, "active": o.active, "seen_at": o.seen_at,
+             "league": f.league_code if f else None, "start_time": f.start_time if f else None,
+             "match_id": f.match_id if f else None} for o, f in rows]
 
 
 @router.get("/operations")
@@ -189,7 +211,8 @@ async def create_order(body: NewOrder) -> dict[str, Any]:
                 detail = str(exc)
         order = StakeOrder(
             source="manual_test", outcome_id=outcome.outcome_id,
-            description=f"{outcome.fixture_name or '?'} · {outcome.market_name or '?'} · {outcome.name}",
+            description=f"{outcome.fixture_name or '?'} · {outcome.market_name or '?'}"
+                        f"{' ' + outcome.specifiers if outcome.specifiers else ''} · {outcome.name}",
             amount=body.amount, currency=limits.currency, min_price=body.min_price or None,
             status="pending_approval", status_detail=detail, request_preview=preview,
         )
@@ -231,6 +254,7 @@ class Heartbeat(BaseModel):
     balances: dict[str, dict[str, float]] | None = None
     token_source: str | None = None
     error: str | None = None
+    hook: dict[str, int] | None = None  # in-page listener counters (diagnostics only)
 
 
 @router.post("/helper/heartbeat")
@@ -239,6 +263,7 @@ async def heartbeat(body: Heartbeat) -> dict[str, Any]:
         await _put(session, "stake_helper", {
             "last_seen": datetime.now(UTC).isoformat(), "version": body.version, "host": body.host,
             "balances": body.balances, "token_source": body.token_source, "error": body.error,
+            "hook": body.hook,
         })
         learn = bool(await _get(session, "stake_learn_mode", False))
         enabled = bool(await _get(session, "stake_execution_enabled", False))
@@ -265,10 +290,11 @@ async def captured(body: Captured) -> dict[str, Any]:
             return {"stored": 0, "outcomes": 0, "note": "Learn mode is off"}
         stored = 0
         for op in body.operations:
-            name, query = str(op.get("operationName") or ""), str(op.get("query") or "")
-            if not name or not query:
+            query = str(op.get("query") or "")
+            described = describe_operation(op.get("operationName"), query)
+            if described is None:
                 continue
-            kind = "mutation" if query.lstrip().startswith("mutation") else "query"
+            name, kind = described
             statement = insert(StakeOperation).values(
                 operation_name=name[:128], kind=kind, query=query, sample_variables=_scrub(op.get("variables") or {}))
             await session.execute(statement.on_conflict_do_update(
@@ -277,15 +303,23 @@ async def captured(body: Captured) -> dict[str, Any]:
                       "seen_count": StakeOperation.seen_count + 1, "last_seen_at": func.now()}))
             stored += 1
         outcomes_seen = 0
+        raw_repo = PostgresRawPayloadRepository(session)
         for response in body.responses:
-            for o in extract_outcomes(_scrub(response.get("data")))[:2000]:
-                statement = insert(StakeOutcome).values(**o)
-                await session.execute(statement.on_conflict_do_update(
-                    index_elements=["outcome_id"],
-                    set_={"price": statement.excluded.price, "active": statement.excluded.active,
-                          "name": statement.excluded.name, "market_name": statement.excluded.market_name,
-                          "fixture_name": statement.excluded.fixture_name, "seen_at": func.now()}))
-                outcomes_seen += 1
+            data = _scrub(response.get("data"))
+            if data:
+                # Raw first, like every other source: kept untouched so Stake's fixture/market
+                # structure can be parsed properly (and re-parsed later) without re-capturing.
+                described = describe_operation(response.get("operationName"), "")
+                name = (response.get("operationName") or (described[0] if described else None)
+                        or next(iter(data), "unknown"))
+                await raw_repo.store_if_new(RawPayload.from_request_context(
+                    ProviderRequestContext(provider_name="stake", endpoint=f"graphql/{name}"[:200],
+                                           requested_at=datetime.now(UTC), request_id=str(uuid4())),
+                    data))
+            fixtures, outcomes = parse_payload(data)
+            await store_parsed(session, fixtures, outcomes)
+            outcomes_seen += len(outcomes)
+        await link_stake_fixtures(session)
         await session.commit()
     return {"stored": stored, "outcomes": outcomes_seen}
 

@@ -3,7 +3,7 @@
 // learned, and, ONLY if execution is switched on in the dashboard, asks for the next bet
 // you approved and places it from this tab, using this tab's own logged-in session.
 
-const VERSION = '0.1.0';
+const VERSION = '0.1.1';
 const MARK = '__sportsanalyzer__';
 const POLL_MS = 5000;
 const BALANCES = `query UserBalances { user { id balances { available { amount currency } vault { amount currency } } } }`;
@@ -11,6 +11,7 @@ const BALANCES = `query UserBalances { user { id balances { available { amount c
 let learnMode = false;
 let busy = false;
 let captured = { operations: [], responses: [] };
+let hookStats = null; // what the in-page listener has noticed (counts only)
 
 const send = (message) => new Promise((resolve) => chrome.runtime.sendMessage(message, resolve));
 
@@ -56,6 +57,10 @@ async function balances() {
 }
 
 window.addEventListener('message', (event) => {
+  if (event.source === window && event.data && event.data[MARK] === 'stats') hookStats = event.data.stats;
+});
+
+window.addEventListener('message', (event) => {
   if (event.source !== window || !event.data || event.data[MARK] !== 'captured' || !learnMode) return;
   if (event.data.operation && event.data.operation.query) captured.operations.push(event.data.operation);
   if (event.data.response && event.data.response.data) captured.responses.push(event.data.response);
@@ -93,7 +98,7 @@ async function tick() {
     const { source } = await accessToken();
     const beat = await send({
       type: 'heartbeat',
-      payload: { version: VERSION, host: location.host, balances: bal, token_source: source, error },
+      payload: { version: VERSION, host: location.host, balances: bal, token_source: source, error, hook: hookStats },
     });
     if (!beat || !beat.ok) return;
     setLearn(Boolean(beat.flags.learn_mode));

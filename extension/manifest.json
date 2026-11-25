@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "SportsAnalyzer Stake Helper",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Connects your logged-in Stake tab to your local SportsAnalyzer app: shows your balance, learns Stake's request shapes, and places only bets you approved on the dashboard.",
   "permissions": ["storage"],
   "host_permissions": ["http://127.0.0.1:8000/*"],
