@@ -237,3 +237,46 @@ def parse_sport_bets(payload: Any) -> list[dict[str, Any]]:
 
     walk(payload)
     return list(bets.values())
+
+
+# Stake computes the live cash-out value in the browser from streamed odds and its cash-out
+# settings; no server request returns it. This per-leg factor reproduces the values Stake's
+# page showed for the owner's two multis on 2026-11-25 (0.83 and 0.91): value ~= potential
+# multiplier / product(current odds of unsettled legs) x 0.9617^legs. It is an ESTIMATE only
+# and is never used to execute a cash-out.
+CASHOUT_LEG_FACTOR = 0.9617
+
+
+def cashout_view(raw: dict[str, Any]) -> dict[str, Any]:
+    """Availability (exactly Stake's rule) and an estimated cash-out multiplier for one own bet."""
+    legs = []
+    for leg in raw.get("outcomes") or []:
+        market = leg.get("market") or {}
+        outcome = leg.get("outcome") or {}
+        fixture = leg.get("fixture") or {}
+        legs.append({
+            "fixture": fixture.get("name"),
+            "selection": outcome.get("name"),
+            "market": market.get("name"),
+            "odds_at_bet": _num(leg.get("odds")),
+            "current_odds": _num(outcome.get("odds")),
+            "status": leg.get("status"),
+            "open": (market.get("status") == "active" and bool(outcome.get("active"))
+                     and fixture.get("cashoutEnabled", True) is not False),
+        })
+    pending = [leg for leg in legs if (leg["status"] or "pending") == "pending"]
+    reason = None
+    if raw.get("cashoutDisabled"):
+        reason = "Stake has disabled cash-out on this bet"
+    elif not pending:
+        reason = "All legs settled"
+    elif any(not leg["open"] for leg in pending):
+        reason = "A market is suspended (often during live play)"
+    estimate = None
+    potential = _num(raw.get("potentialMultiplier"))
+    if reason is None and potential and all(leg["current_odds"] for leg in pending):
+        product = 1.0
+        for leg in pending:
+            product *= leg["current_odds"]
+        estimate = round(potential / product * CASHOUT_LEG_FACTOR ** len(pending), 4)
+    return {"available": reason is None, "reason": reason, "estimate_multiplier": estimate, "legs": legs}

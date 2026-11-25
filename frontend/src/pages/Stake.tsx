@@ -190,7 +190,7 @@ export default function Stake() {
       </div>
 
       <div className="mt-6">
-        <StakeBets listLearned={Boolean(s?.bet_list_learned)} cashoutLearned={Boolean(s?.cashout_request_learned)} />
+        <StakeBets listLearned={Boolean(s?.bet_list_learned)} />
       </div>
 
       <Card className="mt-6">

@@ -24,7 +24,7 @@ export default function InPlay() {
             <th className="px-5 py-2 font-medium" />
             <th className="px-3 py-2 text-right font-medium">Staked</th>
             <th className="px-3 py-2 text-right font-medium">Est. payout</th>
-            <th className="px-5 py-2 text-right font-medium">Cash-out now</th>
+            <th className="px-5 py-2 text-right font-medium">Cash-out ≈</th>
           </tr>
         </thead>
         <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">

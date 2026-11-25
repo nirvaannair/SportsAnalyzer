@@ -52,6 +52,7 @@ from backend.execution.stake_requests import (
     bet_result,
     build_bet_request,
     build_cashout_variables,
+    cashout_view,
     describe_operation,
     is_bet_mutation,
     parse_sport_bets,
@@ -453,18 +454,28 @@ async def stake_bets(open_only: bool = True) -> list[dict[str, Any]]:
         if open_only and not _is_open(b):
             continue
         amount = b.amount or 0.0
+        view = cashout_view(b.raw or {})
+        legs = view["legs"]
+        title = (f"{len(legs)}-leg multi" if len(legs) > 1
+                 else f"{(legs[0]['selection'] if legs else None) or b.description or b.id}")
         out.append({
             "id": b.id, "status": b.status, "open": _is_open(b), "amount": amount, "currency": b.currency,
-            "description": b.description, "placed_at": b.placed_at, "updated_at": b.updated_at,
+            "title": title, "legs": legs, "placed_at": b.placed_at, "updated_at": b.updated_at,
             "potential_payout": round(amount * b.potential_multiplier, 2) if b.potential_multiplier else None,
-            "cashout_value": round(amount * b.cashout_multiplier, 2) if b.cashout_multiplier else None,
-            "cashout_available": bool(b.cashout_multiplier) and not b.cashout_disabled,
+            "cashout_available": view["available"], "cashout_reason": view["reason"],
+            "cashout_estimate": (round(amount * view["estimate_multiplier"], 2)
+                                 if view["estimate_multiplier"] is not None else None),
         })
     return out
 
 
 @router.post("/bets/{bet_id}/cashout")
 async def cashout(bet_id: str) -> dict[str, Any]:
+    # Paused: the cash-out request carries a multiplier chosen by the caller, and Stake only
+    # computes the exact live value inside its own page. Sending an estimate could pay out less
+    # than Stake's real offer, so dashboard cash-outs stay off until they can use Stake's value.
+    raise HTTPException(409, "Cash-out from the dashboard is paused: Stake calculates the exact amount live on "
+                             "its own page. Use the Cashout button in Stake's My Bets for now.")
     async with AsyncSessionFactory() as session:
         bet = await session.get(StakeBet, bet_id)
         if bet is None or not _is_open(bet):
@@ -490,7 +501,11 @@ async def exposure() -> dict[str, Any]:
             StakeOrder.status.in_(["pending_approval", "approved", "sent"]), StakeOrder.kind != "cashout"))).scalars().all()
     real_stake = sum(b.amount or 0 for b in real)
     real_payout = sum((b.amount or 0) * (b.potential_multiplier or 0) for b in real)
-    real_cashout = sum((b.amount or 0) * (b.cashout_multiplier or 0) for b in real if b.cashout_multiplier)
+    real_cashout = 0.0
+    for b in real:
+        view = cashout_view(b.raw or {})
+        if view["estimate_multiplier"] is not None:
+            real_cashout += (b.amount or 0) * view["estimate_multiplier"]
     return {
         "real": {"bets": len(real), "stake": round(real_stake, 2), "potential_payout": round(real_payout, 2),
                  "cashout_value": round(real_cashout, 2)},

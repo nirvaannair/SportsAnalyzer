@@ -172,9 +172,11 @@ export type Exposure = {
   pending_orders: { count: number; stake: number; potential_payout: number }
   paper: { bets: number; stake: number; potential_payout: number }
 }
+export type StakeBetLeg = { fixture: string | null; selection: string | null; market: string | null
+  odds_at_bet: number | null; current_odds: number | null; status: string | null; open: boolean }
 export type StakeBetRow = { id: string; status: string | null; open: boolean; amount: number; currency: string | null
-  description: string | null; placed_at: string | null; potential_payout: number | null; cashout_value: number | null
-  cashout_available: boolean }
+  title: string; legs: StakeBetLeg[]; placed_at: string | null; potential_payout: number | null
+  cashout_available: boolean; cashout_reason: string | null; cashout_estimate: number | null }
 export type Automation = {
   started_at?: string; next_cycle_at?: string
   last_cycle?: { at: string; settled: number; strategies: Record<string, { created?: number; skipped?: string }> }
