@@ -2,7 +2,71 @@
 
 A personal, locally run football analytics and betting system. It pulls in data from several free sports-data APIs and from scraped injury news, reconciles all of it into one consistent model of teams, players and matches, runs statistical and machine-learning models to estimate match probabilities, compares those to bookmaker odds to find value, and places and tracks bets on Stake. Staking strategies such as fractional Kelly and automatic compounding are configurable. A clean, minimal dashboard shows the whole thing.
 
-> **Status:** this README describes the target system and what the existing code already covers. It is the agreed brief before the main build starts.
+> **For a new chat / new developer:** start with **Project handover** below. It is kept up to date after every piece of work and says what the owner wants, how everything works, what is done, what is not, and the rules that must not be broken. The numbered sections after it are the original design brief.
+
+---
+
+## Project handover (last updated 2026-11-25)
+
+### What the owner wants (condensed)
+- A **local** football analysis + betting system for **themselves**: the top-5 European leagues **and their second tiers** (ENG1/2, ESP1/2, ITA1/2, GER1/2, FRA1/2). Markets: **1X2, Over/Under 2.5, BTTS**.
+- Data from **free API plans only** (slow multi-day collection is fine), and **scraping done by an in-app open-source tool (Scrapy)** whose activity is visible on the dashboard. Not ad-hoc scraping by the assistant.
+- **Player-level analysis:** how teams play with and without each player; how players do against the kind of opponent they face next; **3D team style maps**.
+- **"Crazy" ML** that **must never base predictions on bookmaker odds** (odds are only the price/payout). See §5.0. This is the owner's most important rule.
+- Bets placed on **Stake** (INR wallet, ₹500 deposited) through automation, tested with **₹1 bets**. **End goal: fully automatic betting** with **compounding**. On the Overview page the owner sets **which strategies run, the % of winnings reinvested**, and each strategy's mode **paper / approve / auto**.
+- A polished, clean, minimal dark dashboard. The owner wants to **see the commands that run** (Terminal tabs) and **check the UI regularly**.
+- The owner is new to Claude Code; explain plainly. **Keep this README current** so a fresh chat can continue.
+
+### Hard rules
+1. **Models never use odds as inputs** or blend toward the market (§5.0). Enforced by `tests/test_odds_firewall.py`. Prices live in `odds_quotes` / `stake_outcomes` and are read only by `backend/evaluation`, `backend/strategies` and `backend/execution`.
+2. **Secrets never go to GitHub** (the repo is public). Keys live in `.env` (git-ignored); only `.env.example` is committed.
+3. **The assistant never places real-money bets itself** and never bypasses Cloudflare or other bot protection (no cf_clearance cookies, no browser impersonation). Real bets go out only from the owner's own Stake tab via the Chrome extension, only when the owner has switched Execution on, and only within the caps in `.env`.
+4. Default money limits: `STAKE_MAX_BET=1`, `STAKE_TEST_BUDGET=20`, `STAKE_MAX_BETS_PER_DAY=10` (₹).
+5. Ask before spending the owner's API-Football quota (100 requests/day on the free plan; 2024/25 is the season the plan covers).
+
+### Status
+| Area | State | Where |
+|---|---|---|
+| Docker Postgres 17 on `localhost:5433` | ✅ working | `docker-compose.yml` |
+| Results + odds 2015/16 to now, 10 leagues (43.8k matches, 1.24M quotes) | ✅ | `backend/ingestion/fdcuk.py`, CLI `import-fdcuk` |
+| Upcoming fixtures (next days) | ✅ | CLI `import-fixtures` |
+| Upcoming matches weeks ahead from ESPN's schedule | ✅ | `backend/scraping/loaders.py` |
+| API-Football 2024/25 fixtures + team matching (199/200 automatic) | ✅ | `backend/ingestion/api_football_sync.py` |
+| Identity resolution (teams matched across providers by shared results) + review page | ✅ | `backend/identity/team_resolver.py` |
+| Odds-free models: Elo, Dixon-Coles, blend; weekly walk-forward backtest 2018 to now | ✅ but **not bettable yet** (blend log loss 1.024 vs bookmakers 1.006; simulated ROI −8% to −12%) | `backend/models/`, CLI `backtest`, `predict` |
+| Scrapy ESPN spider: lineups, substitution minutes, events, team stats; Scraper page | ✅; **full backfill 2019 to now running (run #7, about 20 h)** | `backend/scraping/` |
+| Stake Chrome extension (balance, Learn mode, places approved bets) | ✅; 2 real ₹1 bets placed automatically after approval | `extension/`, Stake page |
+| Stake fixtures parsed and linked to our matches | ✅ (21/30 linked on first capture; La Liga waits for the backfill) | `backend/execution/stake_parse.py`, `stake_link.py` |
+| Strategies, compounding, paper/approve/auto, Overview controls | 🚧 **in progress** | `backend/strategies/` (tables `strategies`, `strategy_bets` exist) |
+| Player impact model (with/without), player vs opponent style | ⏳ after the backfill finishes | |
+| 3D team style maps | ⏳ | |
+| Injury/news spiders | ⏳ | |
+
+### Known issues / gaps
+- Models are honest and calibrated but **weaker than the market**; the player layer and injuries are the plan to close the gap. Don't enable auto mode for real money until paper trading shows a calibrated, positive edge.
+- Pinnacle closing odds stop partway through 2025/26; market-average closing odds are the comparison from then on.
+- API-Football's free plan can't fetch several fixtures per request and has no current season, so per-match player data comes from ESPN via Scrapy.
+- ESPN's robots.txt returns 403 to automated tools (Scrapy treats that as "no rules"). Requests stay polite: one per 2 s, cached.
+- Stake GraphQL requests carry no `operationName`; names are parsed from the query text. The learned bet mutation is `BetSlipFooter_SportBet`.
+- 35 ESPN teams (mostly Spain) stay unmatched until the backfill provides evidence; they show on Identity review.
+
+### Next steps (in order)
+1. Finish **strategies + paper trading + Overview controls** (reinvest %, strategy picker, paper/approve/auto), plus a background loop that refreshes fixtures and predictions, settles bets and places strategy bets.
+2. When the backfill completes: **player impact model** (regularised adjusted plus-minus on goals/shots per 90), lineup-adjusted team strength, then **3D style maps** (PCA/UMAP + clusters, react-three-fiber).
+3. **Injury/news spiders** (Scrapy) feeding availability features.
+4. Retrain and backtest with player features; compare to the market; only then consider auto mode with real money.
+
+### Tools and stack
+Python 3.12 (`.venv`), FastAPI + uvicorn, SQLAlchemy 2 (async with asyncpg; psycopg for Scrapy), Alembic, PostgreSQL 17 in Docker, pandas/numpy/scipy/scikit-learn, Scrapy, httpx/aiohttp; React 19 + Vite + TypeScript + Tailwind v4 + TanStack Query + lucide icons; a Chrome MV3 extension; pytest + ruff. GitHub: `nirvaannair/SportsAnalyzer` (work happens on branch `claude/football-betting-ml-analyzer-e7dd8d` and is merged through PRs; `gh` is at `C:\Program Files\GitHub CLI\gh.exe`, not on PATH).
+
+### Day-to-day: what must be running
+1. **Docker Desktop** (database container `sportsanalyzer-db`).
+2. **API:** `.\.venv\Scripts\uvicorn.exe backend.api.main:app --reload --port 8000`
+3. **Dashboard:** `npm --prefix frontend run dev`, then open http://localhost:5173
+4. For Stake: Chrome with the **SportsAnalyzer Stake Helper** extension loaded from `extension/` and a logged-in stake.com tab.
+
+### Dashboard pages
+Overview · Matches (model probabilities vs prices) · Stake (helper, balance, switches, approvals, outcomes) · Models (backtest metrics, calibration, simulated bets) · Data sources · Scraper (runs, live log, items) · Identity review. Pages marked P2–P4 in the sidebar are not built yet.
 
 ---
 
@@ -96,27 +160,7 @@ bet is handed to the helper.
 
 ## 2. What is already in the repo
 
-The existing code is a solid **data-ingestion and identity foundation**. It is well structured and worth keeping.
-
-| Area | Files | What it does |
-|---|---|---|
-| Config | `backend/core/config.py` | Pydantic settings loaded from `.env` (`SPORTSANALYZER_DB_*`, `_PROVIDER_*`, `_SCHEDULER_*`, `_IDENTITY_*`). Identity auto-resolution threshold defaults to 0.95. |
-| Database | `backend/database/engine.py`, `models.py`, `alembic/` | Async SQLAlchemy engine and an Alembic migration that creates `raw_provider_observations`: every provider response, with request params, headers, payload hash, status and timestamps. |
-| Provider abstraction | `backend/integrations/base.py`, `registry.py`, `config.py` | An abstract `ProviderAdapter` with capabilities (`TEAMS`, `MATCHES`, `PLAYER_INJURIES`, `ODDS`, `BET_PLACEMENT`, …), a registry to enable or disable providers, and per-provider rate-limit, quota, retry, cache and sync config. |
-| Rate limiting | `backend/integrations/rate_limiter.py` | A sliding-window limiter (per second/minute/hour/day) that also reads quota headers from responses. This is what makes free-plan backfilling over several days work. |
-| Raw storage | `backend/integrations/raw.py`, `repository.py`, `postgres_raw_repository.py` | Immutable raw payloads with content hashing and `store_if_new` deduplication, so unchanged responses are not stored twice. |
-| API-Football | `backend/integrations/api_football.py`, `api_football_config.py` | A working adapter with health check, quota snapshot, backoff and error classification. |
-| Identity | `backend/identity/*.py` | Canonical entities (team, player, competition, season), provider-to-canonical mappings with status (active/rejected/superseded/unresolved), resolution methods (exact ID, cross-reference, fuzzy name, composite score, manual override), evidence and conflicts, plus a name normalizer. |
-| Scripts | `scripts/*.py` | Inspecting API-Football, testing the adapter and testing the database connection. |
-
-**Gaps and issues found:**
-
-- `StakeAPI` is committed as a **gitlink (submodule) with no `.gitmodules`**, so it is empty in every clone or worktree. It must become a proper submodule, be vendored, or be replaced (see §7).
-- There is a `Providers README.md` in the main checkout, but it is untracked and empty.
-- The identity *models* exist, but there are no DB tables for canonical entities or mappings yet, and no resolver that actually runs.
-- There is no normalized (parsed) layer between raw payloads and canonical entities yet: no fixtures, results, lineups, odds or injuries tables.
-- There are no tests (the `scripts/test_*` files are manual scripts, not pytest).
-- There is no `pyproject.toml` or `requirements.txt` in this repo.
+See **Project handover → Status** at the top; it is kept current.
 
 ---
 
