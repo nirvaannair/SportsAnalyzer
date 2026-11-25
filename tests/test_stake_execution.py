@@ -9,6 +9,7 @@ from backend.execution.guardrails import (
 )
 from backend.execution.stake_requests import (
     TemplateError,
+    active_bet_list,
     bet_result,
     build_bet_request,
     describe_operation,
@@ -69,6 +70,16 @@ def test_bet_mutation_detection() -> None:
     assert is_bet_mutation("SportBet", "mutation")
     assert not is_bet_mutation("SportBet", "query")
     assert not is_bet_mutation("UserBalances", "query")
+    # Cash-out requests mention "Bet" but must never be used to place a bet.
+    assert not is_bet_mutation("SportBetPreview_CashoutSportBet", "mutation")
+    assert is_bet_mutation("BetSlipFooter_SportBet", "mutation")
+
+
+def test_active_bet_list_only_from_own_list() -> None:
+    assert active_bet_list({"data": {"user": {"activeSportBets": [{"id": 1}]}}}) == [{"id": 1}]
+    assert active_bet_list({"data": {"user": {"activeSportBets": []}}}) == []
+    assert active_bet_list({"data": {"highrollerSportBets": [{"id": 1}]}}) is None
+    assert active_bet_list({"errors": [{"message": "x"}]}) is None
 
 
 def test_extract_outcomes_from_nested_response() -> None:

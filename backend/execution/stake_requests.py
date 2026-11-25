@@ -46,7 +46,29 @@ def describe_operation(operation_name: str | None, query: str) -> tuple[str, str
 
 
 def is_bet_mutation(operation_name: str, kind: str) -> bool:
-    return kind == "mutation" and bool(BET_MUTATION_HINT.search(operation_name))
+    """A request that places a bet. Cash-out requests also mention "Bet" and are never one."""
+    return (kind == "mutation" and bool(BET_MUTATION_HINT.search(operation_name))
+            and "cashout" not in operation_name.lower())
+
+
+def active_bet_list(payload: Any) -> list[Any] | None:
+    """The `user.activeSportBets` list in a My Bets response, or None if this isn't one."""
+    if isinstance(payload, list):
+        for value in payload:
+            found = active_bet_list(value)
+            if found is not None:
+                return found
+        return None
+    if not isinstance(payload, dict):
+        return None
+    user = payload.get("user")
+    if isinstance(user, dict) and isinstance(user.get("activeSportBets"), list):
+        return user["activeSportBets"]
+    for value in payload.values():
+        found = active_bet_list(value)
+        if found is not None:
+            return found
+    return None
 
 
 class TemplateError(ValueError):

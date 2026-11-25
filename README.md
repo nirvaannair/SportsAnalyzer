@@ -6,7 +6,7 @@ A personal, locally run football analytics and betting system. It pulls in data 
 
 ---
 
-## Project handover (last updated 2026-11-25, evening)
+## Project handover (last updated 2026-11-25, night)
 
 ### What the owner wants (condensed)
 - A **local** football analysis + betting system for **themselves**: the top-5 European leagues **and their second tiers** (ENG1/2, ESP1/2, ITA1/2, GER1/2, FRA1/2). Markets: **1X2, Over/Under 2.5, BTTS**.
@@ -72,6 +72,8 @@ A personal, locally run football analytics and betting system. It pulls in data 
 - 35 ESPN teams (mostly Spain) stay unmatched until the backfill provides evidence; they show on Identity review.
 - **Learned Stake requests** (from the owner's tab, Learn mode): single bet `BetSlipFooter_SportBet`; multi `BetSlipFooter_SportBet#multi` (same mutation, several `outcomeIds`, empty `identifier` kept); own open bets `FetchActiveSportBets` (`user.activeSportBets[]` with `potentialMultiplier`, `cashoutMultiplier`, `cashoutDisabled`; re-run by the helper every minute with limit 50); cash-out `SportBetPreview_CashoutSportBet(betId, multiplier, cashoutPercent)`. **Cash-out values are computed by Stake in the browser** from streamed odds (no server endpoint; `cashoutMultiplier` in the bet list is a ceiling, not the live value). The dashboard shows availability exactly (all unsettled legs' markets active) and an *estimate* (`cashout_view`, ≈ potential ÷ Π current odds × 0.9617 per leg, calibrated on the owner's screen). **Dashboard cash-outs never send a computed multiplier**: on the owner's click the helper (extension v0.1.3) opens the bet's page in the owner's Stake tab (`?iid=sport:…&modal=bet`), presses **Stake's own Cashout button** (and Stake's confirm button if shown), and reports Stake's `cashoutSportBet` answer with the exact payout. If the button is missing or disabled it stops and reports why. This depends on Stake's page layout; if Stake redesigns it, update `runCashout` in `extension/content.js`. **Never use `BetsBoard_HighrollerSportBetsBase`**: it is the public board of *other people's* bets. `parse_sport_bets` only accepts bets under `user { }`.
 - Multi legs are treated as independent (legs always come from different matches).
+- **Fixed 2026-11-25 (night):** the learned "place bet" request had been picked up as the cash-out mutation (its name contains "Bet"); `is_bet_mutation` now excludes cash-out requests, so real bets use `BetSlipFooter_SportBet`. Bets that leave Stake's active list (settled or cashed out) are now marked `closed` on the next helper refresh, but only when the response really is the owner's `user.activeSportBets` list and holds fewer than 50 bets. We don't yet record whether a closed real bet won or lost; that needs Stake's settled-bets list (learn it from My Bets → Settled).
+- **Owner's instruction (2026-11-25): cash-out is parked.** Don't work on it further unless asked. The main page no longer shows cash-out figures.
 
 ### Next steps (in order)
 1. First real cash-out through the dashboard (owner's click) and first strategy multi in approve mode, to confirm end to end.
@@ -99,7 +101,7 @@ Python 3.12 (`.venv`), FastAPI + uvicorn, SQLAlchemy 2 (async with asyncpg; psyc
 4. For Stake: Chrome with the **SportsAnalyzer Stake Helper** extension loaded from `extension/` and a logged-in stake.com tab.
 
 ### Dashboard pages
-Overview (In-play payout card; strategy controls: on/off, paper/approve/auto, reinvest %, settings incl. confidence band and multi legs) · Bet ledger · Matches (model probabilities vs prices) · Stake (helper, balance, switches, learned requests, approvals, Your Stake bets + cash-out, outcomes) · Models (backtest metrics, calibration, simulated bets) · Data sources · Scraper (runs, live log, items) · Identity review. Pages marked P2–P4 in the sidebar are not built yet.
+Overview (top row: live Stake balance, money on Stake now with payout if all win, bets sent by the system today versus caps, strategies on; System card: helper, execution, learned requests, automation, predictions, scraper; In-play payout card; strategy controls: on/off, paper/approve/auto, reinvest %, settings incl. confidence band and multi legs) · Bet ledger · Matches (model probabilities vs prices) · Stake (helper, balance, switches, learned requests, approvals, Your Stake bets + cash-out, outcomes) · Models (backtest metrics, calibration, simulated bets) · Data sources · Scraper (runs, live log, items) · Identity review. Pages marked P2–P4 in the sidebar are not built yet.
 
 ---
 

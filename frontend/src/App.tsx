@@ -58,12 +58,12 @@ function Sidebar() {
   const health = useQuery({ queryKey: ['health'], queryFn: api.health })
   const summary = useQuery({ queryKey: ['summary'], queryFn: api.summary })
   const reviewCount = summary.data?.identity_review ?? 0
-  const stake = useQuery({ queryKey: ['stake', 'status'], queryFn: api.stakeStatus })
+  const stake = useQuery({ queryKey: ['stake', 'status'], queryFn: api.stakeStatus, refetchInterval: 10000 })
   const dbTone = health.isError ? 'bad' : health.data?.database.ok ? 'ok' : health.isLoading ? 'off' : 'bad'
   const dbLabel = health.isError
     ? 'API offline'
     : health.data?.database.ok
-      ? 'All systems normal'
+      ? 'API and database OK'
       : health.isLoading
         ? 'Connecting…'
         : 'Database offline'
@@ -112,6 +112,10 @@ function Sidebar() {
       <div className="mt-4 space-y-3 border-t border-zinc-100 px-2 pt-4 dark:border-zinc-800">
         <div className="flex items-center gap-2 text-xs text-zinc-500 dark:text-zinc-400">
           <StatusDot tone={dbTone} /> {dbLabel}
+        </div>
+        <div className="flex items-center gap-2 text-xs text-zinc-500 dark:text-zinc-400">
+          <StatusDot tone={stake.data?.helper.connected ? 'ok' : 'bad'} />
+          {stake.data?.helper.connected ? 'Stake helper connected' : 'Stake helper offline'}
         </div>
         <NavLink
           to="/stake"
