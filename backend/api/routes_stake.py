@@ -49,6 +49,7 @@ from backend.execution.stake_parse import parse_payload, parse_start
 from backend.execution.stake_requests import (
     MULTI_SUFFIX,
     TemplateError,
+    active_bet_list,
     bet_result,
     build_bet_request,
     cashout_view,
@@ -64,6 +65,7 @@ from backend.integrations.raw import RawPayload
 router = APIRouter(prefix="/api/stake")
 
 HELPER_STALE_SECONDS = 30
+ACTIVE_LIST_LIMIT = 50  # the helper asks Stake for this many open bets
 SENT_TIMEOUT = timedelta(minutes=2)
 _SECRET_KEYS = ("token", "authorization", "cookie", "password", "session")
 
@@ -269,7 +271,7 @@ async def heartbeat(body: Heartbeat) -> dict[str, Any]:
             if op:
                 variables = dict(op.sample_variables or {})
                 if "limit" in variables:
-                    variables["limit"] = 50  # all open bets, not just the first few
+                    variables["limit"] = ACTIVE_LIST_LIMIT  # all open bets, not just the first few
                 bet_list_request = {"operationName": op.operation_name, "query": op.query, "variables": variables}
         await session.commit()
     return {"learn_mode": learn, "execution_enabled": enabled, "poll_seconds": 5,
@@ -433,11 +435,22 @@ class BetList(BaseModel):
 @router.post("/helper/bets")
 async def helper_bets(body: BetList) -> dict[str, Any]:
     """The helper re-runs your Stake "My Bets" request every minute; this stores the result."""
-    bets = parse_sport_bets(_scrub(body.data or {}))
+    data = _scrub(body.data or {})
+    bets = parse_sport_bets(data)
+    listed = active_bet_list(data)
+    closed = 0
     async with AsyncSessionFactory() as session:
         await _store_stake_bets(session, bets)
+        # A bet that has left Stake's active list is settled (or cashed out). Only trust a full
+        # list: one that is really the active list and shorter than the requested page size.
+        if listed is not None and len(listed) < ACTIVE_LIST_LIMIT:
+            seen = {b["id"] for b in bets}
+            for bet in (await session.execute(select(StakeBet))).scalars().all():
+                if bet.id not in seen and _is_open(bet):
+                    bet.active, bet.status = False, "closed"
+                    closed += 1
         await session.commit()
-    return {"bets": len(bets)}
+    return {"bets": len(bets), "closed": closed}
 
 
 def _is_open(b: StakeBet) -> bool:
