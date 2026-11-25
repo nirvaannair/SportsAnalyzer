@@ -15,6 +15,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import func, select, text
 
+from backend.api.routes_data import router as data_router
 from backend.core.config import ENV_FILE
 from backend.database.engine import AsyncSessionFactory, dispose_database_engine
 from backend.database.models import RawProviderObservation
@@ -24,6 +25,7 @@ load_dotenv(ENV_FILE)
 
 # Providers we plan to support, and the env var that holds each key.
 PROVIDERS: list[dict[str, str]] = [
+    {"name": "fdcuk", "label": "football-data.co.uk", "key_env": ""},  # no key needed
     {"name": "api_football", "label": "API-Football", "key_env": "API_FOOTBALL_API_KEY"},
     {"name": "football_data", "label": "football-data.org", "key_env": "FOOTBALL_DATA_API_KEY"},
     {"name": "thesportsdb", "label": "TheSportsDB", "key_env": "THESPORTSDB_API_KEY"},
@@ -46,6 +48,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.include_router(data_router)
 
 
 @app.get("/api/health")
@@ -88,7 +91,7 @@ async def providers() -> list[dict[str, object]]:
         {
             "name": p["name"],
             "label": p["label"],
-            "configured": bool(os.getenv(p["key_env"], "").strip()),
+            "configured": not p["key_env"] or bool(os.getenv(p["key_env"], "").strip()),
             "observations": counts.get(p["name"], 0),
             "last_received_at": last_seen.get(p["name"]),
         }

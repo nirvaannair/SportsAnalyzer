@@ -5,7 +5,7 @@ import { api } from '../lib/api'
 
 const ROADMAP = [
   { phase: 0, title: 'Foundations', detail: 'Project setup, Docker Postgres, tests, API and dashboard shell', done: true },
-  { phase: 1, title: 'Data', detail: 'Canonical teams and matches, identity matching, more providers, backfill planner' },
+  { phase: 1, title: 'Data', detail: 'Canonical teams and matches, identity matching, more providers, backfill planner', done: true },
   { phase: 2, title: 'News', detail: 'Injury scrapers and player importance' },
   { phase: 3, title: 'Models', detail: 'Ratings, Dixon-Coles, LightGBM, backtesting' },
   { phase: 4, title: 'Strategy + paper trading', detail: 'Staking, compounding, risk limits, bet ledger' },
@@ -15,6 +15,8 @@ const ROADMAP = [
 
 export default function Overview() {
   const providers = useQuery({ queryKey: ['providers'], queryFn: api.providers })
+  const summary = useQuery({ queryKey: ['summary'], queryFn: api.summary })
+  const n = (v: number | undefined) => (v === undefined ? '…' : v.toLocaleString('en-IN'))
   const configured = providers.data?.filter((p) => p.configured).length ?? 0
   const observations = providers.data?.reduce((sum, p) => sum + p.observations, 0) ?? 0
 
@@ -46,22 +48,19 @@ export default function Overview() {
         <Card>
           <CardHeader title="Data" />
           <dl className="divide-y divide-zinc-100 text-sm dark:divide-zinc-800">
-            <div className="flex justify-between px-5 py-3">
-              <dt className="text-zinc-500 dark:text-zinc-400">Providers with keys</dt>
-              <dd className="tabular font-medium">
-                {providers.isLoading ? '…' : `${configured} / ${providers.data?.length ?? 0}`}
-              </dd>
-            </div>
-            <div className="flex justify-between px-5 py-3">
-              <dt className="text-zinc-500 dark:text-zinc-400">Raw observations stored</dt>
-              <dd className="tabular font-medium">
-                {providers.isLoading ? '…' : observations.toLocaleString('en-IN')}
-              </dd>
-            </div>
-            <div className="flex justify-between px-5 py-3">
-              <dt className="text-zinc-500 dark:text-zinc-400">Leagues tracked</dt>
-              <dd className="tabular font-medium">10</dd>
-            </div>
+            {[
+              ['Matches', n(summary.data?.matches)],
+              ['Odds quotes', n(summary.data?.odds_quotes)],
+              ['Teams', n(summary.data?.teams)],
+              ['Seasons covered', summary.data?.first_match ? `${summary.data.first_match.slice(0, 4)} – ${summary.data.last_match?.slice(0, 4)}` : '…'],
+              ['Providers with keys', providers.isLoading ? '…' : `${configured} / ${providers.data?.length ?? 0}`],
+              ['Raw observations', providers.isLoading ? '…' : observations.toLocaleString('en-IN')],
+            ].map(([label, value]) => (
+              <div key={label} className="flex justify-between px-5 py-3">
+                <dt className="text-zinc-500 dark:text-zinc-400">{label}</dt>
+                <dd className="tabular font-medium">{value}</dd>
+              </div>
+            ))}
           </dl>
         </Card>
       </div>
