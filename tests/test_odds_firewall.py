@@ -17,8 +17,8 @@ from backend.models.dixon_coles import DixonColesModel
 from backend.models.elo import pre_match_ratings
 
 MODELS_DIR = Path(__file__).resolve().parents[1] / "backend" / "models"
-FORBIDDEN_NAMES = {"OddsQuote", "odds_quotes", "load_prices"}
-FORBIDDEN_MODULES = ("backend.evaluation", "backend.pipeline", "backend.ingestion")
+FORBIDDEN_NAMES = {"OddsQuote", "odds_quotes", "load_prices", "StakeOutcome", "stake_outcomes"}
+FORBIDDEN_MODULES = ("backend.evaluation", "backend.pipeline", "backend.ingestion", "backend.execution")
 
 
 def _model_sources():

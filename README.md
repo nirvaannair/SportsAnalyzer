@@ -61,6 +61,15 @@ npm --prefix frontend run build          # type-check + build the dashboard
 | `frontend/` | React + Vite + Tailwind dashboard |
 | `tests/` | pytest suite |
 
+### Stake browser helper
+
+Stake's betting API sits behind Cloudflare, which only lets real browsers through, so bets are
+placed from **your own logged-in Stake tab** by a small Chrome extension in `extension/`
+(install steps in `extension/README.md`). The dashboard's **Stake** page has the switches
+(Learn mode, Execution; both off by default) and the approval queue. The app enforces the
+limits in `.env` (`STAKE_MAX_BET`, `STAKE_TEST_BUDGET`, `STAKE_MAX_BETS_PER_DAY`) before any
+bet is handed to the helper.
+
 ### Data notes
 
 - **football-data.co.uk is the seed source.** It defines the canonical teams and matches; every other provider's teams are matched to them (by shared results first, names second). Anything uncertain goes to the dashboard's Identity review page.

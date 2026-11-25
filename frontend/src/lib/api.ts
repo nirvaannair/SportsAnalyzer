@@ -86,6 +86,66 @@ export type IdentityReview = {
   counts: { provider: string; status: string; method: string | null; count: number }[]
 }
 
+export type ScrapeRun = {
+  id: number
+  spider: string
+  args: { leagues?: string; date_from?: string; date_to?: string; refetch?: string }
+  status: 'queued' | 'running' | 'loading' | 'finished' | 'failed' | 'stopped'
+  stats: {
+    requests?: number
+    responses?: number
+    cached?: number
+    items?: number
+    items_by_type?: Record<string, number>
+    errors?: number
+    http_errors?: Record<string, number>
+    loaded?: Record<string, number>
+  }
+  message: string | null
+  created_at: string
+  started_at: string | null
+  finished_at: string | null
+}
+export type ScrapedItemRow = {
+  id: number
+  run_id: number | null
+  spider: string
+  type: string
+  key: string
+  url: string
+  scraped_at: string
+  loaded: boolean
+  summary: string
+}
+export type ScraperTotals = {
+  items_by_type: Record<string, number>
+  details_waiting_for_team_links: number
+  players: number
+  matches_with_lineups: number
+}
+
+export type StakeStatus = {
+  helper: { connected: boolean; last_seen?: string; host?: string; version?: string; token_source?: string;
+            error?: string | null; balances?: { available: Record<string, number>; vault: Record<string, number> } | null }
+  execution_enabled: boolean
+  learn_mode: boolean
+  limits: { max_bet: number; budget: number; max_bets_per_day: number; currency: string }
+  spent_total: number
+  bets_today: number
+  budget_left: number
+  bet_request_learned: boolean
+  bet_operation: string | null
+  orders_by_status: Record<string, number>
+}
+export type StakeOutcome = { outcome_id: string; fixture: string | null; market: string | null; name: string;
+                             price: number | null; active: boolean | null; seen_at: string }
+export type StakeOrder = {
+  id: number; created_at: string; source: string; outcome_id: string; description: string; amount: number
+  currency: string; min_price: number | null; status: string; status_detail: string | null
+  request_preview: Record<string, unknown> | null; stake_bet_id: string | null; placed_price: number | null
+  approved_at: string | null; sent_at: string | null; finished_at: string | null
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, init)
   if (!response.ok) {
@@ -98,7 +158,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 const post = <T>(path: string, body?: unknown) =>
   request<T>(path, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', 'X-Requested-By': 'sportsanalyzer' },
     body: body === undefined ? undefined : JSON.stringify(body),
   })
 
@@ -112,6 +172,25 @@ export const api = {
       `/api/matches?league=${league}&season=${season}&limit=${limit}&offset=${offset}`,
     ),
   models: () => request<ModelSummary[]>('/api/models'),
+  scraperRuns: () => request<ScrapeRun[]>('/api/scraper/runs'),
+  scraperTotals: () => request<ScraperTotals>('/api/scraper/totals'),
+  scraperItems: (runId: number | null, type: string, limit = 50) =>
+    request<{ total: number; items: ScrapedItemRow[] }>(
+      `/api/scraper/items?limit=${limit}${runId ? `&run_id=${runId}` : ''}${type ? `&item_type=${type}` : ''}`,
+    ),
+  scraperItem: (id: number) => request<{ id: number; type: string; key: string; url: string; data: unknown }>(`/api/scraper/items/${id}`),
+  scraperLog: (runId: number) => request<{ lines: string[] }>(`/api/scraper/runs/${runId}/log`),
+  startScrape: (body: { spider: string; leagues: string[]; date_from: string; date_to: string; refetch: boolean }) =>
+    post<{ id: number }>('/api/scraper/runs', body),
+  stopScrape: (id: number) => post(`/api/scraper/runs/${id}/stop`),
+  stakeStatus: () => request<StakeStatus>('/api/stake/status'),
+  stakeSettings: (body: { execution_enabled?: boolean; learn_mode?: boolean }) => post('/api/stake/settings', body),
+  stakeOutcomes: (q: string) => request<StakeOutcome[]>(`/api/stake/outcomes?q=${encodeURIComponent(q)}`),
+  stakeOperations: () => request<{ name: string; kind: string; seen: number; last_seen_at: string; is_bet: boolean }[]>('/api/stake/operations'),
+  stakeOrders: () => request<StakeOrder[]>('/api/stake/orders'),
+  stakeCreateOrder: (outcome_id: string, amount: number) => post<StakeOrder>('/api/stake/orders', { outcome_id, amount }),
+  stakeApprove: (id: number) => post(`/api/stake/orders/${id}/approve`),
+  stakeReject: (id: number) => post(`/api/stake/orders/${id}/reject`),
   identityReview: () => request<IdentityReview>('/api/identity/review'),
   resolveMapping: (id: number, teamId: number) => post(`/api/identity/${id}/resolve`, { team_id: teamId }),
   rejectMapping: (id: number) => post(`/api/identity/${id}/reject`),

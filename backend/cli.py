@@ -90,6 +90,15 @@ async def cmd_predict(_: argparse.Namespace) -> None:
     print("Predictions for upcoming matches:", ", ".join(f"{m} {n}" for m, n in counts.items()), flush=True)
 
 
+async def cmd_load_scraped(_: argparse.Namespace) -> None:
+    from backend.scraping.loaders import load_espn
+
+    async with AsyncSessionFactory() as session:
+        result = await load_espn(session)
+        await session.commit()
+    print("Scraped data loaded:", result, flush=True)
+
+
 async def cmd_sync_api_football(args: argparse.Namespace) -> None:
     from backend.ingestion.api_football_sync import sync_fixtures
 
@@ -147,6 +156,7 @@ def main() -> None:
     p.add_argument("--leagues", help="comma-separated codes (default: all)")
     p.set_defaults(func=cmd_sync_api_football)
 
+    sub.add_parser("load-scraped", help="Link scraped ESPN teams/matches and load lineups")         .set_defaults(func=cmd_load_scraped)
     sub.add_parser("resolve-teams", help="Re-run team matching for unresolved provider teams") \
         .set_defaults(func=cmd_resolve_teams)
     sub.add_parser("summary", help="Show what is in the database").set_defaults(func=cmd_summary)

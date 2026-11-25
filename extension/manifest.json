@@ -1,0 +1,23 @@
+{
+  "manifest_version": 3,
+  "name": "SportsAnalyzer Stake Helper",
+  "version": "0.1.0",
+  "description": "Connects your logged-in Stake tab to your local SportsAnalyzer app: shows your balance, learns Stake's request shapes, and places only bets you approved on the dashboard.",
+  "permissions": ["storage"],
+  "host_permissions": ["http://127.0.0.1:8000/*"],
+  "background": { "service_worker": "background.js" },
+  "content_scripts": [
+    {
+      "matches": ["https://stake.com/*", "https://*.stake.com/*", "https://stake.ac/*", "https://stake.bet/*"],
+      "js": ["page_hook.js"],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": ["https://stake.com/*", "https://*.stake.com/*", "https://stake.ac/*", "https://stake.bet/*"],
+      "js": ["content.js"],
+      "run_at": "document_start"
+    }
+  ],
+  "action": { "default_popup": "popup.html", "default_title": "SportsAnalyzer Stake Helper" }
+}

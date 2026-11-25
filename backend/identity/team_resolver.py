@@ -92,11 +92,15 @@ def _fixture_votes(evidence: list[dict[str, Any]], index: dict) -> tuple[dict[in
     """Count, per canonical team, how many of the provider team's results it also has."""
     votes: dict[int, int] = defaultdict(int)
     usable = 0
+    covered = {key[0] for key in index}  # dates for which we have finished results to compare with
     for f in evidence:
         if f.get("home_goals") is None or f.get("away_goals") is None:
             continue
-        usable += 1
         d = date.fromisoformat(f["date"])
+        # Provider dates are UTC; the local (our) date is the same day or, for late kickoffs, the next.
+        if not any(d + timedelta(days=k) in covered for k in (0, 1)):
+            continue  # our results for that day aren't in yet: neither for nor against
+        usable += 1
         seen: set[int] = set()
         for k in (0, -1, 1):  # kickoff dates can differ by a day across timezones
             for home, away in index.get((d + timedelta(days=k), f["home_goals"], f["away_goals"]), []):
@@ -137,6 +141,18 @@ async def resolve_mapping(session: AsyncSession, mapping: ProviderEntityMapping,
             decision = (ResolutionMethod.COMPOSITE_SCORE.value, best.fixture_score)
     elif best and best.name_score == 1.0 and (not runner_up or runner_up.name_score < 0.9):
         decision = (ResolutionMethod.NAME_AND_CONTEXT.value, 0.97)
+    elif best and usable >= 2 and best.fixture_score == 1.0:
+        # Few results, but every one of them lines up with this team.
+        second = (runner_up.fixture_score or 0) if runner_up else 0
+        if usable >= 3 and second <= 0.34:
+            decision = (ResolutionMethod.COMPOSITE_SCORE.value, 0.92)
+        elif best.name_score >= 0.5 and second <= 0.5:
+            decision = (ResolutionMethod.COMPOSITE_SCORE.value, 0.9)
+    elif best and best.name_score >= 0.8 and (best.fixture_score is None or best.fixture_score >= 0.5):
+        # Very close name ("Birmingham City" / "Birmingham"), clearly ahead, results don't disagree.
+        by_name = sorted((c.name_score for c in candidates), reverse=True)
+        if len(by_name) < 2 or by_name[1] <= best.name_score - 0.15:
+            decision = (ResolutionMethod.NAME_AND_CONTEXT.value, 0.9)
 
     if decision is None or best is None or best.team_id in taken:
         mapping.status = MappingStatus.UNRESOLVED.value
@@ -182,11 +198,11 @@ async def resolve_unresolved_teams(session: AsyncSession) -> dict[str, int]:
     return {"resolved": resolved, "review": len(unresolved) - resolved}
 
 
-async def link_fixtures_to_matches(session: AsyncSession) -> int:
-    """Map provider fixtures to canonical matches once both teams are resolved."""
+async def link_fixtures_to_matches(session: AsyncSession, provider: str = "api_football") -> int:
+    """Map a provider's fixtures to canonical matches once both teams are resolved."""
     team_map = dict((await session.execute(
         select(ProviderEntityMapping.provider_entity_id, ProviderEntityMapping.canonical_id).where(
-            ProviderEntityMapping.provider_name == "api_football",
+            ProviderEntityMapping.provider_name == provider,
             ProviderEntityMapping.entity_type == "team",
             ProviderEntityMapping.status == MappingStatus.ACTIVE.value,
         )
@@ -194,7 +210,7 @@ async def link_fixtures_to_matches(session: AsyncSession) -> int:
 
     fixtures = list((await session.execute(
         select(ProviderEntityMapping).where(
-            ProviderEntityMapping.provider_name == "api_football",
+            ProviderEntityMapping.provider_name == provider,
             ProviderEntityMapping.entity_type == "match",
             ProviderEntityMapping.status == MappingStatus.UNRESOLVED.value,
         )
