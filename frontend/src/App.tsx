@@ -1,10 +1,11 @@
 import { useQuery } from '@tanstack/react-query'
 import {
   Brain, Bug, CalendarDays, Database, GitMerge, GraduationCap, LayoutDashboard,
-  Newspaper, Power, Receipt, Settings, Sparkles, Wallet,
+  Newspaper, Power, Receipt, Settings, Sparkles, Users, Wallet,
 } from 'lucide-react'
 import type { ComponentType } from 'react'
 import { NavLink, Navigate, Route, Routes } from 'react-router-dom'
+import { GUIDE_RAIL_ID } from './components/Guide'
 import { StatusDot } from './components/ui'
 import { api } from './lib/api'
 import DataSources from './pages/DataSources'
@@ -14,8 +15,10 @@ import Matches from './pages/Matches'
 import Models from './pages/Models'
 import Scraper from './pages/Scraper'
 import Stake from './pages/Stake'
+import TeamNews from './pages/TeamNews'
 import Training from './pages/Training'
 import Overview from './pages/Overview'
+import Players from './pages/Players'
 import Placeholder from './pages/Placeholder'
 
 type NavItem = {
@@ -42,7 +45,8 @@ const NAV: { section: string; items: NavItem[] }[] = [
     items: [
       { to: '/models', label: 'Models', icon: Brain },
       { to: '/training', label: 'Training', icon: GraduationCap },
-      { to: '/news', label: 'Team news', icon: Newspaper, phase: 2, blurb: 'Injury and suspension feed linked to players, with estimated match impact.' },
+      { to: '/players', label: 'Players', icon: Users },
+      { to: '/news', label: 'Team news', icon: Newspaper },
     ],
   },
   {
@@ -139,14 +143,16 @@ export default function App() {
   return (
     <div className="flex min-h-screen">
       <Sidebar />
-      <main className="min-w-0 flex-1 px-10 py-8">
-        <div className="mx-auto max-w-6xl">
+      <main className="flex min-w-0 flex-1 justify-center gap-8 px-10 py-8">
+        <div className="w-full min-w-0 max-w-6xl">
           <Routes>
             <Route path="/" element={<Overview />} />
             <Route path="/sources" element={<DataSources />} />
             <Route path="/matches" element={<Matches />} />
             <Route path="/models" element={<Models />} />
             <Route path="/training" element={<Training />} />
+            <Route path="/players" element={<Players />} />
+            <Route path="/news" element={<TeamNews />} />
             <Route path="/scraper" element={<Scraper />} />
             <Route path="/stake" element={<Stake />} />
             <Route path="/ledger" element={<Ledger />} />
@@ -169,6 +175,8 @@ export default function App() {
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </div>
+        {/* Plain-English guide column (filled by <Guide> on each page), only on very wide screens */}
+        <aside id={GUIDE_RAIL_ID} className="sticky top-8 hidden h-fit max-h-[calc(100vh-4rem)] w-80 shrink-0 overflow-y-auto 2xl:block" />
       </main>
     </div>
   )

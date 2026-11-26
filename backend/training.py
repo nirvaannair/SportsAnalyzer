@@ -46,7 +46,8 @@ def _set(run_id: int, **values: Any) -> None:
         connection.execute(update(TrainingRun).where(TrainingRun.id == run_id).values(**values))
 
 
-def create_run(models: list[str], first_test_season: int = DEFAULT_FIRST_TEST_SEASON) -> int:
+def create_run(models: list[str], first_test_season: int = DEFAULT_FIRST_TEST_SEASON,
+               feature_groups: dict[str, bool] | None = None) -> int:
     from backend.models.ml import ML_MODELS
 
     unknown = [m for m in models if m not in ML_MODELS]
@@ -55,7 +56,8 @@ def create_run(models: list[str], first_test_season: int = DEFAULT_FIRST_TEST_SE
     with engine().begin() as connection:
         return connection.execute(
             TrainingRun.__table__.insert().values(
-                models=models, args={"first_test_season": first_test_season}, status="queued",
+                models=models, status="queued",
+                args={"first_test_season": first_test_season, "feature_groups": feature_groups or {}},
             ).returning(TrainingRun.id)
         ).scalar_one()
 
@@ -145,15 +147,17 @@ def _score(metrics: dict[str, Any]) -> dict[str, Any]:
             "ou25_logloss": metrics.get("ou25_logloss"), "btts_logloss": metrics.get("btts_logloss")}
 
 
-async def _train(run_id: int, models: list[str], first_test_season: int, as_of: date) -> dict[str, Any]:
+async def _train(run_id: int, models: list[str], first_test_season: int, as_of: date,
+                 feature_groups: dict[str, bool]) -> dict[str, Any]:
     from backend.database.engine import AsyncSessionFactory
     from backend.evaluation.metrics import evaluate, load_prices
-    from backend.models.data import load_matches
-    from backend.models.features import FEATURE_COLUMNS, build_features
+    from backend.models.data import load_lineups, load_matches, load_news_mentions
+    from backend.models.features import FEATURE_COLUMNS, apply_feature_groups, build_features
     from backend.models.ml import (
         MODEL_CLASSES,
         compose_auto,
         ensemble,
+        save_feature_groups,
         save_league_choice,
         stored_name,
         training_rows,
@@ -167,11 +171,15 @@ async def _train(run_id: int, models: list[str], first_test_season: int, as_of: 
     report.stage("data", "features", "Loading matches and building point-in-time features")
     async with AsyncSessionFactory() as session:
         matches = await load_matches(session)
-    feats = build_features(matches)
+        lineups, goal_events = await load_lineups(session)
+        news = await load_news_mentions(session)
+    feats = apply_feature_groups(build_features(matches, lineups, goal_events, news), feature_groups)
     finished = matches[matches["status"] == "finished"][["match_id", "home_goals", "away_goals", "season", "league"]]
     upcoming = upcoming_rows(feats, pd.Timestamp(as_of))
     results["data"] = {"matches": int(len(matches)), "training_rows": int(len(training_rows(feats))),
-                       "features": len(FEATURE_COLUMNS), "upcoming": int(len(upcoming))}
+                       "features": len(FEATURE_COLUMNS), "upcoming": int(len(upcoming)),
+                       "matches_with_lineups": int(lineups["match_id"].nunique()) if not lineups.empty else 0,
+                       "news_mentions": int(len(news)), "feature_groups": feature_groups}
 
     async def store(name: str, kind: str, preds: pd.DataFrame, params: dict[str, Any]) -> dict[str, Any]:
         async with AsyncSessionFactory() as session:
@@ -204,6 +212,7 @@ async def _train(run_id: int, models: list[str], first_test_season: int, as_of: 
         choice = chooser.all_choices()
         model.save(MODEL_DIR / family)
         save_league_choice(MODEL_DIR / family, choice)
+        save_feature_groups(MODEL_DIR / family, feature_groups)
         live = {"global": model.predict(upcoming, "global"), "league": model.predict(upcoming, "league")}
         live["auto"] = compose_auto(live, upcoming, choice)
         for variant, frame in live.items():
@@ -237,7 +246,8 @@ def execute(run_id: int) -> None:
         asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
     try:
         first = int((run.args or {}).get("first_test_season", DEFAULT_FIRST_TEST_SEASON))
-        results = asyncio.run(_run_async(run_id, list(run.models), first))
+        groups = dict((run.args or {}).get("feature_groups") or {})
+        results = asyncio.run(_run_async(run_id, list(run.models), first, groups))
         _set(run_id, status="finished", finished_at=datetime.now(UTC), results=results,
              message="Trained, backtested and predicting upcoming matches")
     except Exception as exc:
@@ -246,22 +256,26 @@ def execute(run_id: int) -> None:
         raise
 
 
-async def _run_async(run_id: int, models: list[str], first: int) -> dict[str, Any]:
+async def _run_async(run_id: int, models: list[str], first: int, groups: dict[str, bool]) -> dict[str, Any]:
     from backend.database.engine import dispose_database_engine
 
     try:
-        return await _train(run_id, models, first, date.today())
+        return await _train(run_id, models, first, date.today(), groups)
     finally:
         await dispose_database_engine()
 
 
-async def ml_live_predictions(matches: pd.DataFrame, as_of: date) -> dict[str, pd.DataFrame]:
+async def ml_live_predictions(matches: pd.DataFrame, as_of: date,
+                              lineups: pd.DataFrame | None = None,
+                              goal_events: pd.DataFrame | None = None,
+                              news: pd.DataFrame | None = None) -> dict[str, pd.DataFrame]:
     """Predict upcoming matches with every saved ML model (used by the automation loop)."""
-    from backend.models.features import build_features
+    from backend.models.features import apply_feature_groups, build_features
     from backend.models.ml import (
         MODEL_CLASSES,
         compose_auto,
         ensemble,
+        load_feature_groups,
         load_league_choice,
         stored_name,
         upcoming_rows,
@@ -270,7 +284,7 @@ async def ml_live_predictions(matches: pd.DataFrame, as_of: date) -> dict[str, p
     saved = [name for name in MODEL_CLASSES if (MODEL_DIR / name / "meta.json").exists()]
     if not saved:
         return {}
-    feats = await asyncio.to_thread(build_features, matches)
+    feats = await asyncio.to_thread(build_features, matches, lineups, goal_events, news)
     upcoming = upcoming_rows(feats, pd.Timestamp(as_of))
     out: dict[str, pd.DataFrame] = {}
     autos = []
@@ -279,8 +293,9 @@ async def ml_live_predictions(matches: pd.DataFrame, as_of: date) -> dict[str, p
             model = await asyncio.to_thread(MODEL_CLASSES[family].load, MODEL_DIR / family)
         except (ValueError, KeyError, FileNotFoundError):  # saved with older features: wait for a retrain
             continue
-        preds = {v: await asyncio.to_thread(model.predict, upcoming, v) for v in ("global", "league")}
-        preds["auto"] = compose_auto(preds, upcoming, load_league_choice(MODEL_DIR / family))
+        rows = apply_feature_groups(upcoming, load_feature_groups(MODEL_DIR / family))  # as it was trained
+        preds = {v: await asyncio.to_thread(model.predict, rows, v) for v in ("global", "league")}
+        preds["auto"] = compose_auto(preds, rows, load_league_choice(MODEL_DIR / family))
         for variant, frame in preds.items():
             out[stored_name(family, variant)] = frame
         autos.append(preds["auto"])
@@ -294,9 +309,11 @@ def main() -> None:
     parser.add_argument("--run-id", type=int, help="run a job created by the API")
     parser.add_argument("--models", default="xgb,nn", help="comma-separated: xgb,nn")
     parser.add_argument("--first-test-season", type=int, default=DEFAULT_FIRST_TEST_SEASON)
+    parser.add_argument("--players", action="store_true", help="use the lineup/player features")
+    parser.add_argument("--news", action="store_true", help="use the news features")
     args = parser.parse_args()
     run_id = args.run_id or create_run([m.strip() for m in args.models.split(",") if m.strip()],
-                                       args.first_test_season)
+                                       args.first_test_season, {"players": args.players, "news": args.news})
     print(f"Training run #{run_id}", flush=True)
     execute(run_id)
 

@@ -17,6 +17,7 @@ import pandas as pd
 
 from backend.models.data import OddsLeakError, assert_odds_free
 from backend.models.elo import pre_match_ratings
+from backend.models.players import PLAYER_FEATURES, player_features
 
 # Per-team stats tracked over recent matches (for = scored by the team, against = conceded).
 _TEAM_STATS = ("gf", "ga", "sf", "sa", "stf", "sta", "cf", "ca", "pts")
@@ -29,7 +30,58 @@ SIDE_FEATURES: tuple[str, ...] = (
     "rest_days", "played_season", "played_total", "elo",
     # opponent-adjusted ratings (see _strength_ratings) and finishing
     "att", "def", "sot_att", "sot_def", "finishing_l10",
+    # from lineups (backend/models/players.py); NaN where no lineup data yet
+    *PLAYER_FEATURES,
+    # from news articles in the 7 days before kickoff; NaN where no news collected yet
+    "news_n7", "news_sentiment7", "news_injury7",
 )
+NEWS_FEATURES: tuple[str, ...] = ("news_n7", "news_sentiment7", "news_injury7")
+# Groups the Training page can switch on/off per run (switched off = blanked, as if never seen).
+FEATURE_GROUPS: dict[str, tuple[str, ...]] = {
+    "players": tuple(f"{side}_{f}" for side in ("home", "away") for f in PLAYER_FEATURES),
+    "news": tuple(f"{side}_{f}" for side in ("home", "away") for f in NEWS_FEATURES),
+}
+
+
+def apply_feature_groups(feats: pd.DataFrame, enabled: dict[str, bool]) -> pd.DataFrame:
+    """Blank out the feature groups that are switched off."""
+    feats = feats.copy()
+    for group, columns in FEATURE_GROUPS.items():
+        if not enabled.get(group, False):
+            feats[list(columns)] = np.nan
+    return feats
+
+
+def _news_features(matches: pd.DataFrame, news: pd.DataFrame, days: int = 7) -> pd.DataFrame:
+    """Per team, news published in the `days` before the match day (strictly before it)."""
+    columns = ["match_id", *(f"{side}_{f}" for side in ("home", "away") for f in NEWS_FEATURES)]
+    if news is None or news.empty:
+        return pd.DataFrame(columns=columns)
+    out = {"match_id": matches["match_id"].to_numpy()}
+    news = news.sort_values("published_at")
+    by_team = {}
+    for team, g in news.groupby("team_id"):
+        t = g["published_at"].to_numpy(dtype="datetime64[ns]")
+        w = g["weight"].to_numpy(dtype=float)
+        by_team[int(team)] = (t, np.concatenate([[0], np.cumsum(w)]),
+                              np.concatenate([[0], np.cumsum(w * g["sentiment"].to_numpy(dtype=float))]),
+                              np.concatenate([[0], np.cumsum(w * g["injury"].to_numpy(dtype=float))]))
+    day = matches["date"].to_numpy(dtype="datetime64[ns]")
+    start = day - np.timedelta64(days, "D")
+    for side in ("home", "away"):
+        n_col, s_col, i_col = (np.full(len(matches), np.nan) for _ in range(3))
+        for i, team in enumerate(matches[f"{side}_id"].to_numpy()):
+            data = by_team.get(int(team))
+            if data is None:
+                continue
+            t, cw, cs, ci = data
+            lo, hi = np.searchsorted(t, start[i]), np.searchsorted(t, day[i])  # [day-7, day)
+            weight = cw[hi] - cw[lo]
+            n_col[i] = weight
+            s_col[i] = (cs[hi] - cs[lo]) / weight if weight > 0 else np.nan
+            i_col[i] = ci[hi] - ci[lo]
+        out[f"{side}_news_n7"], out[f"{side}_news_sentiment7"], out[f"{side}_news_injury7"] = n_col, s_col, i_col
+    return pd.DataFrame(out)
 MATCH_FEATURES: tuple[str, ...] = (
     "elo_diff", "tier", "season_progress", "month", "league_code",
     "rating_xg_home", "rating_xg_away", "rating_sot_home", "rating_sot_away",
@@ -147,8 +199,13 @@ def _head_to_head(matches: pd.DataFrame, last: int = 6) -> pd.DataFrame:
     return pd.DataFrame(rows, columns=["match_id", "h2h_n", "h2h_gd", "h2h_goals"]).astype({"h2h_n": float})
 
 
-def build_features(matches: pd.DataFrame) -> pd.DataFrame:
-    """match_id + FEATURE_COLUMNS + targets (targets NaN for unplayed matches)."""
+def build_features(matches: pd.DataFrame, lineups: pd.DataFrame | None = None,
+                   goal_events: pd.DataFrame | None = None, news: pd.DataFrame | None = None) -> pd.DataFrame:
+    """match_id + FEATURE_COLUMNS + targets (targets NaN for unplayed matches).
+
+    `lineups`/`goal_events` come from backend.models.data.load_lineups; without them the player
+    features are all missing.
+    """
     assert_odds_free(matches.columns)
     long = _team_long(matches)
     by_team = long.groupby("team", sort=False)
@@ -182,6 +239,18 @@ def build_features(matches: pd.DataFrame) -> pd.DataFrame:
     goals = _strength_ratings(matches, "home_goals", "away_goals", prefix="")
     sot = _strength_ratings(matches, "home_shots_target", "away_shots_target", prefix="sot_")
     out = out.merge(goals, on="match_id").merge(sot, on="match_id").merge(_head_to_head(matches), on="match_id")
+    if lineups is not None and not lineups.empty:
+        players = player_features(matches, lineups, goal_events if goal_events is not None else pd.DataFrame(
+            columns=["match_id", "team_id", "minute", "kind"]))
+        out = out.merge(players, on="match_id", how="left")
+    if news is not None and not news.empty:
+        out = out.merge(_news_features(matches, news), on="match_id", how="left")
+    for side in ("home", "away"):
+        for f in (*PLAYER_FEATURES, *NEWS_FEATURES):
+            if f"{side}_{f}" not in out:
+                out[f"{side}_{f}"] = np.nan
+        cols = [f"{side}_{f}" for f in (*PLAYER_FEATURES, *NEWS_FEATURES)]
+        out[cols] = out[cols].astype(float)
     for side in ("home", "away"):
         out[f"{side}_finishing_l10"] = out[f"{side}_gf_l10"] / out[f"{side}_stf_l10"].where(out[f"{side}_stf_l10"] > 0)
     out["elo_diff"] = out["home_elo"] - out["away_elo"]

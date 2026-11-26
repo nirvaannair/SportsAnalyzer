@@ -28,6 +28,7 @@ MODEL_INFO = {
 class StartTraining(BaseModel):
     models: list[str] = Field(default_factory=lambda: ["xgb", "nn"])
     first_test_season: int = training.DEFAULT_FIRST_TEST_SEASON
+    feature_groups: dict[str, bool] = Field(default_factory=lambda: {"players": False, "news": False})
 
 
 def _json(run: TrainingRun, full: bool = True) -> dict[str, Any]:
@@ -110,7 +111,8 @@ async def start(body: StartTraining) -> dict[str, Any]:
             TrainingRun.status.in_(training.ACTIVE)))).scalar_one()
     if busy:
         raise HTTPException(409, "A training run is already going. Stop it or wait for it to finish.")
-    run_id = await asyncio.to_thread(training.create_run, body.models, body.first_test_season)
+    run_id = await asyncio.to_thread(training.create_run, body.models, body.first_test_season,
+                                     body.feature_groups)
     await asyncio.to_thread(training.launch, run_id)
     return {"id": run_id}
 

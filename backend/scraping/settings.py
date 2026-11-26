@@ -19,6 +19,9 @@ SETTINGS: dict = {
     "AUTOTHROTTLE_MAX_DELAY": 30.0,
     "AUTOTHROTTLE_TARGET_CONCURRENCY": 1.0,
     "RETRY_TIMES": 3,
+    # 429/503 are not retried immediately: the crawl pauses until the site is ready again.
+    "RETRY_HTTP_CODES": [500, 502, 504, 522, 524, 408],
+    "DOWNLOADER_MIDDLEWARES": {"backend.scraping.middleware.RateLimitWaitMiddleware": 560},
     # Each page is downloaded once and kept on disk, so re-runs and re-parsing cost nothing.
     "HTTPCACHE_ENABLED": True,
     "HTTPCACHE_DIR": str(SCRAPE_DATA_DIR / "httpcache"),

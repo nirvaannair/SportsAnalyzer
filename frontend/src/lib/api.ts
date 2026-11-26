@@ -194,12 +194,30 @@ export type CollectorProvider = {
 }
 export type Collector = { enabled: boolean; providers: CollectorProvider[] }
 
+export type PlayerRow = {
+  id: number; name: string; team_id: number | null; team: string | null; league: string | null; position: string | null
+  apps: number; starts: number; minutes: number; goals: number; assists: number
+  impact: number; on_gd90: number | null; off_gd90: number | null; last_played: string; current: boolean
+}
+export type Squad = {
+  team_id: number; team: string; league: string | null; squad: PlayerRow[]
+  best_xi: (PlayerRow & { slot: string })[]; best_xi_impact: number; note: string
+}
+
+export type NewsArticleRow = {
+  id: number; league: string | null; published_at: string; headline: string; summary: string | null; url: string | null
+  sentiment: number; injury: boolean
+  signals: { positive: string[]; negative: string[]; injury_terms: string[]; manager: boolean; form: boolean; transfer: boolean }
+  teams: { id: number; name: string }[]; players: { id: number; name: string }[]
+}
+export type NewsTeamMood = { team_id: number; team: string; league: string | null; weight: number; sentiment: number | null; injury_stories: number; articles: number }
+
 export type TrainingScore = { n: number; logloss_1x2: number; accuracy_1x2: number; ou25_logloss?: number | null; btts_logloss?: number | null }
 export type TrainingLeague = { choice: 'global' | 'league'; global: number | null; league: number | null; n: number }
 export type TrainingRun = {
   id: number
   models: string[]
-  args: { first_test_season?: number }
+  args: { first_test_season?: number; feature_groups?: Record<string, boolean> }
   status: 'queued' | 'running' | 'finished' | 'failed' | 'stopped'
   device: string | null
   message: string | null
@@ -273,15 +291,29 @@ export const api = {
   startScrape: (body: { spider: string; leagues: string[]; date_from: string; date_to: string; refetch: boolean }) =>
     post<{ id: number }>('/api/scraper/runs', body),
   stopScrape: (id: number) => post(`/api/scraper/runs/${id}/stop`),
+  scraperAuto: () => request<{ enabled: boolean; last_action: { at: string; action: string } | null }>('/api/scraper/auto'),
+  setScraperAuto: (enabled: boolean) => patch<{ enabled: boolean }>('/api/scraper/auto', { enabled }),
   collector: () => request<Collector>('/api/collector'),
   setCollector: (body: { enabled?: boolean; providers?: Record<string, { enabled?: boolean; daily_budget?: number }> }) =>
     patch<Collector>('/api/collector', body),
   retryCollector: (name: string) => post(`/api/collector/providers/${name}/retry-failed`),
+  players: (params: { league?: string; team_id?: number; q?: string; min_minutes?: number; current?: boolean }) => {
+    const qs = new URLSearchParams(Object.entries(params).filter(([, v]) => v !== undefined && v !== '').map(([k, v]) => [k, String(v)]))
+    return request<{ total: number; players: PlayerRow[]; rated_players: number }>(`/api/players?${qs}`)
+  },
+  playerTeams: (league?: string) => request<{ team_id: number; team: string; league: string; players: number }[]>(`/api/players/teams${league ? `?league=${league}` : ''}`),
+  squad: (teamId: number) => request<Squad>(`/api/players/teams/${teamId}`),
+  newsTeams: (league?: string) =>
+    request<{ days: number; teams: NewsTeamMood[]; total_articles: number; collecting_since: string | null }>(`/api/news/teams${league ? `?league=${league}` : ''}`),
+  newsArticles: (params: { league?: string; team_id?: number; injury?: boolean }) => {
+    const qs = new URLSearchParams(Object.entries(params).filter(([, v]) => v !== undefined && v !== '').map(([k, v]) => [k, String(v)]))
+    return request<NewsArticleRow[]>(`/api/news/articles?${qs}`)
+  },
   trainingInfo: () => request<TrainingInfo>('/api/training/info'),
   trainingRuns: () => request<TrainingRun[]>('/api/training/runs'),
   trainingRun: (id: number) => request<TrainingRun>(`/api/training/runs/${id}`),
   trainingLog: (id: number) => request<{ lines: string[] }>(`/api/training/runs/${id}/log`),
-  startTraining: (body: { models: string[]; first_test_season: number }) => post<{ id: number }>('/api/training/runs', body),
+  startTraining: (body: { models: string[]; first_test_season: number; feature_groups: Record<string, boolean> }) => post<{ id: number }>('/api/training/runs', body),
   stopTraining: (id: number) => post(`/api/training/runs/${id}/stop`),
   stakeStatus: () => request<StakeStatus>('/api/stake/status'),
   stakeSettings: (body: { execution_enabled?: boolean; learn_mode?: boolean }) => post('/api/stake/settings', body),

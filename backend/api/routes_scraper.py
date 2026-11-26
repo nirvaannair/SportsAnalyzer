@@ -23,6 +23,11 @@ SPIDER_INFO = {
         "description": "Match lists, starting XIs, substitutions with minutes, goals, cards, "
                        "player and team stats from ESPN's public feed. Betting odds in the feed are discarded.",
     },
+    "espn_news": {
+        "label": "ESPN football news",
+        "description": "Latest news per league (headline, summary, team and player tags), scored for good/bad "
+                       "news and injuries. Runs every hour automatically.",
+    },
 }
 
 
@@ -40,6 +45,31 @@ def _run_json(run: ScrapeRun) -> dict[str, Any]:
         "message": run.message, "created_at": run.created_at, "started_at": run.started_at,
         "finished_at": run.finished_at,
     }
+
+
+class AutoPatch(BaseModel):
+    enabled: bool
+
+
+@router.get("/auto")
+async def get_auto() -> dict[str, Any]:
+    from backend.scraping.auto import get_auto as read
+
+    async with AsyncSessionFactory() as session:
+        return await read(session)
+
+
+@router.patch("/auto")
+async def set_auto(body: AutoPatch) -> dict[str, Any]:
+    from backend.scraping.auto import cycle
+    from backend.scraping.auto import set_auto as write
+
+    async with AsyncSessionFactory() as session:
+        state = await write(session, enabled=body.enabled)
+        if body.enabled:
+            await cycle(session)  # start straight away rather than at the next 15-minute tick
+        await session.commit()
+        return state
 
 
 @router.get("/spiders")
@@ -71,9 +101,9 @@ async def start_run(body: StartRun) -> dict[str, Any]:
         raise HTTPException(400, "date_from must be before date_to")
     async with AsyncSessionFactory() as session:
         busy = (await session.execute(select(func.count()).select_from(ScrapeRun).where(
-            ScrapeRun.status.in_(["queued", "running", "loading"])))).scalar_one()
+            ScrapeRun.spider == body.spider, ScrapeRun.status.in_(["queued", "running", "loading"])))).scalar_one()
     if busy:
-        raise HTTPException(409, "A scrape is already running. Stop it or wait for it to finish.")
+        raise HTTPException(409, "This scraper is already running. Stop it or wait for it to finish.")
 
     args = {"leagues": ",".join(c.upper() for c in body.leagues), "date_from": body.date_from.isoformat(),
             "date_to": body.date_to.isoformat(), "refetch": "1" if body.refetch else ""}

@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Cpu, GraduationCap, Play, ShieldCheck, Square } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
+import { Guide, type GuideItem } from '../components/Guide'
 import { Badge, Card, CardHeader, EmptyState, PageHeader, StatusDot } from '../components/ui'
 import { api, type TrainingRun, type TrainingScore } from '../lib/api'
 
@@ -92,8 +93,9 @@ function NewRun({ disabled }: { disabled: boolean }) {
   const info = useQuery({ queryKey: ['training', 'info'], queryFn: api.trainingInfo })
   const [models, setModels] = useState<string[]>(['xgb', 'nn'])
   const [first, setFirst] = useState(2018)
+  const [groups, setGroups] = useState<Record<string, boolean>>({ players: false, news: false })
   const start = useMutation({
-    mutationFn: () => api.startTraining({ models, first_test_season: first }),
+    mutationFn: () => api.startTraining({ models, first_test_season: first, feature_groups: groups }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['training'] }),
   })
   const missing = info.data && (!info.data.libraries.xgboost || !info.data.libraries.torch)
@@ -117,6 +119,19 @@ function NewRun({ disabled }: { disabled: boolean }) {
                 </div>
                 <div className="text-xs text-zinc-500 dark:text-zinc-400">{m.description}</div>
               </div>
+            </label>
+          ))}
+        </div>
+        <div className="space-y-1.5 rounded-lg border border-zinc-200 p-3 text-sm dark:border-zinc-800">
+          <div className="text-xs font-medium text-zinc-500 dark:text-zinc-400">Extra inputs (test each on and off)</div>
+          {[
+            ['players', 'Player features', 'Starting-XI strength and missing regulars, from lineups (only leagues with lineups so far).'],
+            ['news', 'News features', 'News mood, volume and injury stories in the 7 days before each match (needs weeks of news history).'],
+          ].map(([key, label, about]) => (
+            <label key={key} className="flex cursor-pointer items-start gap-2">
+              <input type="checkbox" className="mt-0.5 accent-zinc-900 dark:accent-zinc-100" checked={groups[key]}
+                     onChange={(e) => setGroups((g) => ({ ...g, [key]: e.target.checked }))} />
+              <span><span className="font-medium">{label}</span> <span className="text-xs text-zinc-500 dark:text-zinc-400">{about}</span></span>
             </label>
           ))}
         </div>
@@ -162,7 +177,8 @@ function Progress({ run }: { run: TrainingRun }) {
 
   return (
     <Card>
-      <CardHeader title={`Run #${run.id} · ${run.models.map((m) => FAMILY[m] ?? m).join(' + ')}`}
+      <CardHeader title={`Run #${run.id} · ${run.models.map((m) => FAMILY[m] ?? m).join(' + ')}${
+        Object.entries(run.args.feature_groups ?? {}).filter(([, on]) => on).map(([g]) => ` + ${g}`).join('')}`}
                   aside={<span className="text-xs text-zinc-500">{run.device ?? ''} · {duration(run)}</span>} />
       <div className="space-y-4 px-5 py-4">
         <div>
@@ -282,6 +298,71 @@ function Results({ run }: { run: TrainingRun }) {
   )
 }
 
+function TrainingGuide({ run }: { run?: TrainingRun }) {
+  const models = useQuery({ queryKey: ['models'], queryFn: api.models })
+  const scraped = useQuery({ queryKey: ['scraper', 'totals'], queryFn: api.scraperTotals })
+  const market = models.data?.[0]?.metrics.market_reference_1x2?.logloss
+  const baseline = models.data?.[0]?.metrics.baseline_1x2.logloss
+  const blend = models.data?.find((m) => m.model === 'blend')?.metrics['1x2'].logloss ?? 1.0244
+  const scores: TrainingScore[] = Object.entries(run?.results ?? {})
+    .filter(([key]) => key !== 'data')
+    .flatMap(([, r]) => Object.values((r as { variants?: Record<string, TrainingScore> } | undefined)?.variants ?? {}))
+  const best = scores.length ? Math.min(...scores.map((s) => s.logloss_1x2)) : undefined
+  const gap = best !== undefined && market !== undefined ? best - market : undefined
+  const data = run?.results.data
+  const lineups = scraped.data?.matches_with_lineups
+
+  const items: GuideItem[] = [
+    {
+      title: 'Log loss: the main score',
+      body: <>How surprised the model is by real results, on average. Lower is better. Guessing the league average scores
+        {baseline ? ` ${baseline.toFixed(3)}` : ' about 1.08'}; the bookmakers score{market ? ` ${market.toFixed(3)}` : ' about 1.006'}.
+        Small differences matter: 0.01 is a lot.</>,
+      verdict: 'info',
+    },
+    {
+      title: 'Are we better than the bookmakers?',
+      body: gap === undefined ? 'Train a model to see.' : gap < 0
+        ? `Yes, by ${(-gap).toFixed(4)}. This is the condition for betting to pay off long term.`
+        : `Not yet: our best model is ${gap.toFixed(4)} worse. Bets would lose money on average, so keep strategies in paper mode. Player and injury data is the plan to close the gap.`,
+      verdict: gap === undefined ? 'info' : gap < 0 ? 'good' : gap < 0.008 ? 'medium' : 'bad',
+      verdictLabel: gap === undefined ? 'No run yet' : gap < 0 ? 'Beating market' : 'Behind market',
+    },
+    {
+      title: 'Are the ML models better than before?',
+      body: best === undefined ? 'Train a model to see.'
+        : `Best ML model ${best.toFixed(4)} vs the old Elo + Dixon-Coles blend ${blend.toFixed(4)}. Lower is better${best < blend ? ', so the new models are an improvement' : ''}.`,
+      verdict: best === undefined ? 'info' : best < blend ? 'good' : 'medium',
+      verdictLabel: best !== undefined && best < blend ? 'Improved' : undefined,
+    },
+    {
+      title: 'Favourite won',
+      body: 'How often the outcome the model rated most likely actually happened. Around 48–50% is normal in football because draws and upsets are common; it is not the number to judge a betting model on.',
+      verdict: 'info',
+    },
+    {
+      title: 'O/U 2.5 and BTTS',
+      body: 'The same score for Over/Under 2.5 goals and both teams to score. A coin flip scores 0.693, so 0.680 means a small but real edge in knowing which games will be open.',
+      verdict: 'medium', verdictLabel: 'Small edge',
+    },
+    {
+      title: 'Global, per-league and auto',
+      body: 'Global = one model learned from all 10 leagues. Per-league = that model fine-tuned on one league. Auto = in each league, whichever of the two predicted better in earlier seasons. In the league table, the bold number is the better one and "using" is what live predictions use.',
+      verdict: 'info',
+    },
+    {
+      title: 'Is there enough data?',
+      body: <>Team-level: {data ? data.training_rows.toLocaleString('en-IN') : '~40,000'} finished matches from 2015/16 to now
+        (football-data.co.uk results and match stats for all 10 leagues), plenty for team models. Player-level: only
+        {lineups !== undefined ? ` ${lineups.toLocaleString('en-IN')}` : ' a few hundred'} matches have lineups so far; the ESPN backfill and
+        API-Football collector are filling this in.</>,
+      verdict: lineups !== undefined && lineups > 15000 ? 'good' : 'medium',
+      verdictLabel: lineups !== undefined && lineups > 15000 ? 'Enough' : 'Team data yes, player data growing',
+    },
+  ]
+  return <Guide items={items} />
+}
+
 export default function Training() {
   const queryClient = useQueryClient()
   const runs = useQuery({ queryKey: ['training', 'runs'], queryFn: api.trainingRuns, refetchInterval: 3000 })
@@ -323,6 +404,8 @@ export default function Training() {
           </div>
         }
       />
+
+      <TrainingGuide run={run ?? undefined} />
 
       <div className="grid gap-6 lg:grid-cols-5">
         <div className="space-y-6 lg:col-span-2">

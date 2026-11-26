@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ExternalLink, RotateCcw } from 'lucide-react'
 import { useEffect, useState } from 'react'
+import { Guide } from '../components/Guide'
 import { Badge, Card, CardHeader, PageHeader, StatusDot } from '../components/ui'
 import { api, type Collector, type CollectorProvider } from '../lib/api'
 
@@ -164,10 +165,47 @@ function CollectorPanel() {
 
 export default function DataSources() {
   const providers = useQuery({ queryKey: ['providers'], queryFn: api.providers, refetchInterval: 15000 })
+  const collector = useQuery({ queryKey: ['collector'], queryFn: api.collector, refetchInterval: 5000 })
+  const c = collector.data
+  const on = c?.providers.filter((p) => c.enabled && p.enabled && p.configured) ?? []
+  const missingKeys = c?.providers.filter((p) => !p.configured) ?? []
+  const af = c?.providers.find((p) => p.name === 'api_football')
 
   return (
     <>
       <PageHeader title="Data sources" description="Free-plan API collection, keys and stored data for each provider." />
+      <Guide items={[
+        {
+          title: 'Background collector',
+          body: 'Downloads extra data from free football APIs a little at a time, all day. Each provider has its own switch. It never goes over a free plan: it spaces requests out and stops at the daily budget, then carries on after midnight (UTC).',
+          verdict: on.length ? 'good' : 'medium',
+          verdictLabel: on.length ? `${on.length} collecting` : 'Off',
+        },
+        {
+          title: 'Daily budget and the meter',
+          body: 'How many requests a provider may get today. The bar fills as they are used. When it is full the provider waits until tomorrow; nothing breaks.',
+          verdict: 'info',
+        },
+        {
+          title: 'API-Football',
+          body: 'The richest source: injuries and per-match player stats. Its free plan allows 100 requests a day, so the queue takes weeks. That is expected and fine.',
+          verdict: af?.enabled && c?.enabled ? 'good' : 'medium',
+          verdictLabel: af?.enabled && c?.enabled ? 'Collecting' : 'Off: switch on to start',
+        },
+        {
+          title: 'Keys',
+          body: missingKeys.length
+            ? `${missingKeys.map((p) => p.label).join(', ')} need a free key in the .env file (use "Get a free key"), then restart the app.`
+            : 'Every provider that needs a key has one.',
+          verdict: missingKeys.length ? 'medium' : 'good',
+          verdictLabel: missingKeys.length ? `${missingKeys.length} key missing` : 'All set',
+        },
+        {
+          title: 'Stored raw data',
+          body: 'Every answer from a provider is saved untouched first, so it can be re-read later without spending quota again.',
+          verdict: 'info',
+        },
+      ]} />
       <CollectorPanel />
       <Card>
         <CardHeader title="Stored raw data" aside={<span className="text-xs text-zinc-500">Refreshes every 15 s</span>} />

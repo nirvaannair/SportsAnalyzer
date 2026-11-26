@@ -92,3 +92,25 @@ def test_on_pitch_minutes() -> None:
     assert _on_off(_p(subbed_in=True, minute_in=60), 94) == (60, 94)
     assert _on_off(_p(subbed_in=True, minute_in=60, red_card_minute=80), 94) == (60, 80)
     assert _on_off(_p(), 94) == (None, None)  # unused substitute
+
+
+def test_backfill_goes_newest_first() -> None:
+    from datetime import date
+
+    from backend.scraping.auto import backfill_chunks
+    from backend.scraping.spiders.espn_matches import recency_priority
+
+    chunks = backfill_chunks(date(2026, 11, 26))
+    assert chunks[0] == (date(2024, 11, 26), date(2026, 11, 26))
+    assert [c[0] for c in chunks] == sorted((c[0] for c in chunks), reverse=True)
+    assert chunks[-1][0] == date(2019, 7, 1)
+    assert recency_priority("2026-10-01") > recency_priority("2025-10-01") > recency_priority("202001")
+
+
+def test_rate_limit_wait_reads_retry_after() -> None:
+    from backend.scraping.middleware import retry_after_seconds
+
+    assert retry_after_seconds(b"120") == 120
+    assert retry_after_seconds("0") == 1
+    assert retry_after_seconds(None) is None
+    assert retry_after_seconds("Wed, 21 Oct 2026 07:28:00 GMT") is None
