@@ -24,7 +24,7 @@ if (-not (Test-Path (Join-Path $venv 'python.exe'))) { Fail "No Python environme
 if (-not (Test-Path (Join-Path $root '.env'))) { Fail "No .env file here. Copy .env.example to .env and fill it in." }
 if (-not (Test-Path (Join-Path $root 'frontend\node_modules'))) {
     Step "Installing dashboard packages (first run only)"
-    npm --prefix frontend ci
+    npm.cmd --prefix frontend ci
 }
 
 # Settings (single source: config/settings.toml + your Settings-page changes)
@@ -41,8 +41,9 @@ function WaitFor([scriptblock]$ready, [int]$seconds) {
 }
 
 function StartDashboard($style) {
-    $web = "`$host.UI.RawUI.WindowTitle = 'SportsAnalyzer dashboard'; Set-Location '$root'; `$env:SA_DASHBOARD_PORT = '$webPort'; `$env:SA_API_PORT = '$apiPort'; npm --prefix frontend run dev"
-    Start-Process powershell -ArgumentList '-NoExit', '-Command', $web -WindowStyle $style
+    $web = "`$host.UI.RawUI.WindowTitle = 'SportsAnalyzer dashboard'; Set-Location '$root'; `$env:SA_DASHBOARD_PORT = '$webPort'; `$env:SA_API_PORT = '$apiPort'; npm.cmd --prefix frontend run dev"
+    # npm.cmd, not npm: Windows PowerShell may refuse the unsigned npm.ps1 (execution policy AllSigned).
+    Start-Process powershell -ArgumentList '-NoProfile', '-ExecutionPolicy', 'Bypass', '-NoExit', '-Command', $web -WindowStyle $style
 }
 
 # 1. Docker Desktop (runs the database)
@@ -76,7 +77,7 @@ if (Listening $apiPort) {
     Done "already running on port $apiPort"
 } else {
     $api = "`$host.UI.RawUI.WindowTitle = 'SportsAnalyzer API'; Set-Location '$root'; & '$venv\uvicorn.exe' backend.api.main:app --port $apiPort"
-    Start-Process powershell -ArgumentList '-NoExit', '-Command', $api -WindowStyle Minimized
+    Start-Process powershell -ArgumentList '-NoProfile', '-ExecutionPolicy', 'Bypass', '-NoExit', '-Command', $api -WindowStyle Minimized
     Done "starting (minimised window 'SportsAnalyzer API')"
 }
 
