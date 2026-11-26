@@ -14,7 +14,7 @@ from collections import defaultdict
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, text
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -133,7 +133,7 @@ def _on_off(p: dict[str, Any], end_minute: int) -> tuple[int | None, int | None]
     return on, max(on, off)
 
 
-async def load_match_details(session: AsyncSession, limit: int = 5000) -> dict[str, int]:
+async def load_match_details(session: AsyncSession, limit: int = 20000) -> dict[str, int]:
     """Write lineups/events/stats for scraped matches whose match and teams are linked."""
     team_map = dict((await session.execute(
         select(ProviderEntityMapping.provider_entity_id, ProviderEntityMapping.canonical_id).where(
@@ -246,11 +246,25 @@ async def create_scheduled_matches(session: AsyncSession, days_back: int = 2) ->
     return created
 
 
+LOADER_LOCK = 734_221  # Postgres advisory lock: only one ESPN loader at a time
+
+
 async def load_espn(session: AsyncSession) -> dict[str, Any]:
+    """Link scraped teams/matches and load every waiting lineup. Safe to call while a crawl runs
+    (the automation loop does so every 15 minutes); a second caller just skips."""
+    got_lock = (await session.execute(text("SELECT pg_try_advisory_xact_lock(:k)"), {"k": LOADER_LOCK})).scalar()
+    if not got_lock:
+        return {"skipped": "another load is running"}
     teams = await register_espn_teams_and_matches(session)
     resolution = await resolve_unresolved_teams(session)
     scheduled = await create_scheduled_matches(session)
     linked = await link_fixtures_to_matches(session, provider=PROVIDER)
-    details = await load_match_details(session)
+    details: dict[str, int] = {}
+    while True:  # in batches, until nothing more can be loaded
+        batch = await load_match_details(session)
+        for key, value in batch.items():
+            details[key] = value if key == "waiting_for_links" else details.get(key, 0) + value
+        if not batch.get("loaded"):
+            break
     return {"espn_teams": teams, "teams_resolved": resolution["resolved"], "upcoming_matches_added": scheduled,
             "teams_to_review": resolution["review"], "matches_linked": linked, **details}
