@@ -52,7 +52,7 @@ export type Prediction = {
 
 export type Score1x2 = { logloss: number; brier: number; rps: number; accuracy: number }
 export type ModelSummary = {
-  model: 'elo' | 'dixon_coles' | 'blend'
+  model: string
   created_at: string
   default: boolean
   live_trained_until: string | null
@@ -184,6 +184,51 @@ export type Automation = {
   last_error?: { at: string; error: string } | null
 }
 
+export type CollectorProvider = {
+  name: string; label: string; plan: string; collects: string; signup_url: string | null
+  needs_key: boolean; key_env: string | null; configured: boolean; plan_daily_limit: number | null
+  enabled: boolean; daily_budget: number; used_today: number; errors_today: number; remaining_reported: number | null
+  queue: Partial<Record<'pending' | 'done' | 'failed' | 'unavailable', number>>
+  paused_until: string | null; reason: string | null; last_at: string | null; last_task: string | null
+  recent: { label: string; status: string; items: number | null; error: string | null; done_at: string }[]
+}
+export type Collector = { enabled: boolean; providers: CollectorProvider[] }
+
+export type TrainingScore = { n: number; logloss_1x2: number; accuracy_1x2: number; ou25_logloss?: number | null; btts_logloss?: number | null }
+export type TrainingLeague = { choice: 'global' | 'league'; global: number | null; league: number | null; n: number }
+export type TrainingRun = {
+  id: number
+  models: string[]
+  args: { first_test_season?: number }
+  status: 'queued' | 'running' | 'finished' | 'failed' | 'stopped'
+  device: string | null
+  message: string | null
+  created_at: string
+  started_at: string | null
+  finished_at: string | null
+  progress: {
+    model?: string; stage?: string; message?: string; task?: string
+    fold?: number; folds?: number; season?: number; step?: number; steps?: number
+    train_loss?: number; val_loss?: number
+    curve?: [number, number, number][]
+  }
+  results: {
+    data?: { matches: number; training_rows: number; features: number; upcoming: number }
+    ml_ensemble?: { variants: Record<string, TrainingScore> }
+  } & Record<string, {
+    variants?: Record<string, TrainingScore>
+    leagues?: Record<string, TrainingLeague>
+    fits?: { stage: string; season: number | null; task: string; steps: number; best_step: number; best_val_loss: number }[]
+    live_predictions?: number
+    seconds?: number
+  } | undefined>
+}
+export type TrainingInfo = {
+  gpu: string | null
+  libraries: { xgboost: boolean; torch: boolean }
+  models: { name: string; label: string; description: string; saved: boolean }[]
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, init)
   if (!response.ok) {
@@ -228,6 +273,16 @@ export const api = {
   startScrape: (body: { spider: string; leagues: string[]; date_from: string; date_to: string; refetch: boolean }) =>
     post<{ id: number }>('/api/scraper/runs', body),
   stopScrape: (id: number) => post(`/api/scraper/runs/${id}/stop`),
+  collector: () => request<Collector>('/api/collector'),
+  setCollector: (body: { enabled?: boolean; providers?: Record<string, { enabled?: boolean; daily_budget?: number }> }) =>
+    patch<Collector>('/api/collector', body),
+  retryCollector: (name: string) => post(`/api/collector/providers/${name}/retry-failed`),
+  trainingInfo: () => request<TrainingInfo>('/api/training/info'),
+  trainingRuns: () => request<TrainingRun[]>('/api/training/runs'),
+  trainingRun: (id: number) => request<TrainingRun>(`/api/training/runs/${id}`),
+  trainingLog: (id: number) => request<{ lines: string[] }>(`/api/training/runs/${id}/log`),
+  startTraining: (body: { models: string[]; first_test_season: number }) => post<{ id: number }>('/api/training/runs', body),
+  stopTraining: (id: number) => post(`/api/training/runs/${id}/stop`),
   stakeStatus: () => request<StakeStatus>('/api/stake/status'),
   stakeSettings: (body: { execution_enabled?: boolean; learn_mode?: boolean }) => post('/api/stake/settings', body),
   stakeOutcomes: (q: string, mainMarkets = true) =>

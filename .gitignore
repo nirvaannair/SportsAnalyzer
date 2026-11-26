@@ -50,5 +50,7 @@ frontend/dist/
 .claude/settings.local.json
 *.egg-info/
 
-# Scraper cache and logs (local only)
+# Scraper cache and logs, trained models and training logs (local only)
 data/scraper/
+data/models/
+data/training/

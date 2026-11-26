@@ -6,11 +6,15 @@ A personal, locally run football analytics and betting system. It pulls in data 
 
 ---
 
-## Project handover (last updated 2026-11-25, night)
+## Project handover (last updated 2026-11-26)
 
 ### What the owner wants (condensed)
 - A **local** football analysis + betting system for **themselves**: the top-5 European leagues **and their second tiers** (ENG1/2, ESP1/2, ITA1/2, GER1/2, FRA1/2). Markets: **1X2, Over/Under 2.5, BTTS**.
 - Data from **free API plans only** (slow multi-day collection is fine), and **scraping done by an in-app open-source tool (Scrapy)** whose activity is visible on the dashboard. Not ad-hoc scraping by the assistant.
+- **Import much more from the free API providers**, through a background collector the owner **switches on and off on
+  the website**, per provider, always inside each free plan's limits (2026-11-26).
+- **Advanced models, with different models per league considered** (2026-11-26): every model family has a global
+  version and per-league versions, and the better one is used per league.
 - **Player-level analysis:** how teams play with and without each player; how players do against the kind of opponent they face next; **3D team style maps**.
 - **"Crazy" ML** that **must never base predictions on bookmaker odds** (odds are only the price/payout). See §5.0. This is the owner's most important rule.
 - Bets placed on **Stake** (INR wallet, ₹500 deposited) through automation, tested with **₹1 bets**. **End goal: fully automatic betting** with **compounding**. On the Overview page the owner sets **which strategies run, the % of winnings reinvested**, and each strategy's mode **paper / approve / auto**.
@@ -51,14 +55,15 @@ A personal, locally run football analytics and betting system. It pulls in data 
 | API-Football 2024/25 fixtures + team matching (199/200 automatic) | ✅ | `backend/ingestion/api_football_sync.py` |
 | Identity resolution (teams matched across providers by shared results) + review page | ✅ | `backend/identity/team_resolver.py` |
 | Odds-free models: Elo, Dixon-Coles, blend; weekly walk-forward backtest 2018 to now | ✅ but **not bettable yet** (blend log loss 1.024 vs bookmakers 1.006; simulated ROI −8% to −12%) | `backend/models/`, CLI `backtest`, `predict` |
-| Scrapy ESPN spider: lineups, substitution minutes, events, team stats; Scraper page | ✅; **full backfill 2019 to now running (run #7, about 20 h)** | `backend/scraping/` |
+| Scrapy ESPN spider: lineups, substitution minutes, events, team stats; Scraper page | ✅; backfill run #7 died part-way (8.7k items); **restarted 2026-11-26 as run #9** (resumes; pages cached) | `backend/scraping/` |
 | Stake Chrome extension (balance, Learn mode, places approved bets) | ✅; 2 real ₹1 bets placed automatically after approval | `extension/`, Stake page |
 | Stake fixtures parsed and linked to our matches | ✅ (21/30 linked on first capture; La Liga waits for the backfill) | `backend/execution/stake_parse.py`, `stake_link.py` |
 | Strategies, compounding (reinvest %), paper/approve/auto, Overview controls, Bet ledger | ✅ (3 starter strategies, all off and in paper mode) | `backend/strategies/`, `backend/api/routes_strategies.py`, Overview + Bet ledger pages |
 | Automation loop in the API: every 15 min settle + strategy bets; every 6 h fixtures + predictions | ✅ | `backend/automation.py` |
 | Betting upgrades: confidence band per strategy, multi strategies (2–6 legs), approval threshold, In-play card (estimated total payout), Your Stake bets with cash-out | ✅ built; **needs three Learn-mode captures** (learned and verified: 4 own bets, ₹254.98 potential payout shown) | `backend/strategies/core.py`, `backend/execution/orders.py`, `routes_stake.py`, extension v0.1.2 |
-| **Trained ML models** (GPU gradient boosting + neural net) with training-progress page | ⏳ **next** | |
-| Cross-league strength (European cups / domestic cups data) | ⏳ | |
+| **Trained ML models**: XGBoost (CUDA) + residual neural net (PyTorch CUDA), each global + per-league fine-tuned + "auto" (best per league) + ensemble; Training page with live loss curves | ✅ (see "ML models" below) | `backend/models/features.py`, `backend/models/ml.py`, `backend/training.py`, Training page |
+| **Free-plan API collector**: on/off switch per provider, daily budgets, quota meters, persistent queue | ✅ built; OpenLigaDB switched on as a test; **API-Football off until the owner switches it on** | `backend/collector/`, Data sources page |
+| Cross-league strength (European cups / domestic cups data) | ⏳ partly: ratings carry across divisions; Champions League matches come from football-data.org once a key is added | |
 | Player pages + player impact model (with/without), player vs opponent style | ⏳ after the backfill finishes | |
 | 3D team style maps | ⏳ | |
 | Injury/news spiders | ⏳ | |
@@ -75,12 +80,54 @@ A personal, locally run football analytics and betting system. It pulls in data 
 - **Fixed 2026-11-25 (night):** the learned "place bet" request had been picked up as the cash-out mutation (its name contains "Bet"); `is_bet_mutation` now excludes cash-out requests, so real bets use `BetSlipFooter_SportBet`. Bets that leave Stake's active list (settled or cashed out) are now marked `closed` on the next helper refresh, but only when the response really is the owner's `user.activeSportBets` list and holds fewer than 50 bets. We don't yet record whether a closed real bet won or lost; that needs Stake's settled-bets list (learn it from My Bets → Settled).
 - **Owner's instruction (2026-11-25): cash-out is parked.** Don't work on it further unless asked. The main page no longer shows cash-out figures.
 
+### ML models (built 2026-11-26)
+- **Features** (`backend/models/features.py`, all point-in-time, tested): Elo; form over the last 5/10 matches (goals,
+  shots, shots on target, corners, points) and exponentially weighted; venue form; rest days; matches played;
+  **opponent-adjusted attack/defence ratings** on goals and on shots on target (online, carried across divisions so
+  promoted/relegated teams stay on one scale); finishing rate; head-to-head; league, tier, month, season progress.
+  No odds: `assert_features_odds_free`, and `tests/test_odds_firewall.py` scans the code.
+- **Families** (`backend/models/ml.py`): XGBoost (5 boosters: 1X2, O/U 2.5, BTTS, home goals, away goals; CUDA) and a
+  residual MLP with a head per market (Poisson goal rates; CUDA).
+- **Per league:** each family trains a *global* model on all leagues, then fine-tunes a copy per league (XGBoost: extra
+  trees at a lower learning rate; NN: extra epochs at a lower learning rate). **Auto** picks global or league per league
+  using only earlier seasons' results. **ml_ensemble** averages XGBoost auto and NN auto.
+- **Validation:** walk-forward by season from 2018/19 (each season predicted by models trained on earlier seasons; early
+  stopping on the latest 15% of the training data). Results go into `model_runs` like Elo/Dixon-Coles, so the Models
+  page compares everything and strategies can select `xgb`, `xgb_league`, `xgb_auto`, `nn`, `nn_league`, `nn_auto`,
+  `ml_ensemble`.
+- **Live:** final models are saved in `data/models/` (git-ignored); the automation loop re-predicts upcoming matches with
+  them every 6 h. Train from the **Training** page (or `python -m backend.training --models xgb,nn`).
+- **GPU setup:** `pip install xgboost` and
+  `pip install torch==2.15.0+cu132 --index-url https://download.pytorch.org/whl/cu132`
+  (plain `pip install torch` gives a CPU-only build on Windows).
+- **First results (run #1, 2026-11-26, 5.5 min on the RTX 4050; 31,884 matches 2018/19 to now, 1X2 log loss, lower is
+  better):** ml_ensemble **1.0221**, XGBoost global 1.0223 (auto 1.0226, per-league 1.0228), neural net 1.0259, the old
+  blend 1.0244, bookmakers' closing prices 1.0062. XGBoost/ensemble are now the best models on 1X2, O/U 2.5 and BTTS,
+  **but still behind the market, so not bettable yet.** Per-league fine-tuning helps in a few leagues (XGBoost: Ligue 2;
+  NN: Championship, La Liga, Segunda, Bundesliga, 2. Bundesliga, Serie A) and "auto" uses it only there. The missing
+  edge has to come from information the market has and we don't yet: lineups, injuries, player quality.
+
+### Free-plan API collector (built 2026-11-26)
+Data sources page: master switch, one switch per provider, daily budget box, today's usage meter, queue progress and
+recent requests. Off by default. Runs inside the API server (`backend/collector/engine.py`): one request at a time per
+provider, spaced below each plan's per-minute limit, stopping at the daily budget (per UTC day, table `provider_usage`).
+Every response is stored untouched in `raw_provider_observations` first. Odds endpoints are refused in code.
+
+| Provider | Free plan | Collects | Status |
+|---|---|---|---|
+| API-Football | 100/day, 10/min, seasons 2022–2024 | injuries per league-season, fixture lists, then **player stats per fixture** (3,788 queued for 2024/25 so far) | key set; **off: the owner decides when to spend quota** (budget 90/day) |
+| football-data.org | 10/min, 12 competitions incl. Champions League | squads, matches (cross-league via the CL) | **needs a free key**: register at football-data.org, put it in `.env` as `FOOTBALL_DATA_API_KEY`, restart the API |
+| OpenLigaDB | free, no key | Bundesliga + 2. Bundesliga 2015 to now with goal minutes | on |
+| TheSportsDB | test key, ~30/min | team metadata | off |
+
+Parsing: API-Football fixture lists are parsed straight away (teams and fixtures registered, per-fixture follow-ups
+queued). Other responses wait in the raw store; their parsers (player stats → `match_players`, injuries → availability
+features, OpenLigaDB goal minutes, football-data.org CL matches) are part of the player-layer step below.
+
 ### Next steps (in order)
 1. First real cash-out through the dashboard (owner's click) and first strategy multi in approve mode, to confirm end to end.
-2. **ML training system:** a `training_runs` table with live progress (epoch, loss, validation metrics) and a
-   **Training** page; GPU via PyTorch CUDA and LightGBM/XGBoost GPU. Gradient-boosted trees + a neural net on
-   point-in-time features (ratings, form, schedule, **player availability/impact**); no odds as inputs. Walk-forward
-   validation (§5.6). Each trained model is registered so strategies can choose it.
+2. Compare the ML models with Elo/Dixon-Coles and the market on the Models page; tune them (hyper-parameter search,
+   calibration layer) and paper-trade the best one.
 3. **Cross-league strength:** add European competitions and domestic cups to the ESPN spider; **one global model
    with league-level strength offsets** (hierarchical), optionally fine-tuned per league. Not fully separate
    per-league models, because teams from different leagues meet.
@@ -88,11 +135,12 @@ A personal, locally run football analytics and betting system. It pulls in data 
    attack and defence); lineup-adjusted team strength; **best-XI search** over the current squad; **transfer
    what-if** (add a player's impact rating to the expected XI and re-predict); player vs opponent style; then the
    **3D style maps**.
-5. **Injury/news spiders** (Scrapy) feeding availability features.
+5. **Parsers for the collected API data** (API-Football player stats and injuries, OpenLigaDB, football-data.org) and
+   **injury/news spiders** (Scrapy) feeding availability features; then retrain from the Training page.
 6. Retrain, backtest, paper-trade; compare with the market; only then consider Auto mode with real money.
 
 ### Tools and stack
-Python 3.12 (`.venv`), FastAPI + uvicorn, SQLAlchemy 2 (async with asyncpg; psycopg for Scrapy), Alembic, PostgreSQL 17 in Docker, pandas/numpy/scipy/scikit-learn, Scrapy, httpx/aiohttp; React 19 + Vite + TypeScript + Tailwind v4 + TanStack Query + lucide icons; a Chrome MV3 extension; pytest + ruff. GitHub: `nirvaannair/SportsAnalyzer` (work happens on branch `claude/football-betting-ml-analyzer-e7dd8d` and is merged through PRs; `gh` is at `C:\Program Files\GitHub CLI\gh.exe`, not on PATH).
+Python 3.12 (`.venv`), FastAPI + uvicorn, SQLAlchemy 2 (async with asyncpg; psycopg for Scrapy), Alembic, PostgreSQL 17 in Docker, pandas/numpy/scipy/scikit-learn, **XGBoost 3.4 (CUDA) and PyTorch 2.15 (CUDA 13.2)**, Scrapy, httpx/aiohttp; React 19 + Vite + TypeScript + Tailwind v4 + TanStack Query + lucide icons; a Chrome MV3 extension; pytest + ruff. GitHub: `nirvaannair/SportsAnalyzer` (work happens on branch `claude/football-betting-ml-analyzer-e7dd8d` and is merged through PRs; `gh` is at `C:\Program Files\GitHub CLI\gh.exe`, not on PATH).
 
 ### Day-to-day: what must be running
 1. **Docker Desktop** (database container `sportsanalyzer-db`).
@@ -101,7 +149,7 @@ Python 3.12 (`.venv`), FastAPI + uvicorn, SQLAlchemy 2 (async with asyncpg; psyc
 4. For Stake: Chrome with the **SportsAnalyzer Stake Helper** extension loaded from `extension/` and a logged-in stake.com tab.
 
 ### Dashboard pages
-Overview (top row: live Stake balance, money on Stake now with payout if all win, bets sent by the system today versus caps, strategies on; System card: helper, execution, learned requests, automation, predictions, scraper; In-play payout card; strategy controls: on/off, paper/approve/auto, reinvest %, settings incl. confidence band and multi legs) · Bet ledger · Matches (model probabilities vs prices) · Stake (helper, balance, switches, learned requests, approvals, Your Stake bets + cash-out, outcomes) · Models (backtest metrics, calibration, simulated bets) · Data sources · Scraper (runs, live log, items) · Identity review. Pages marked P2–P4 in the sidebar are not built yet.
+Training (start/stop runs, live loss curve per season fold, global-vs-league table, backtest scores) · Data sources (collector switches, budgets, quota meters, queue) · Overview (top row: live Stake balance, money on Stake now with payout if all win, bets sent by the system today versus caps, strategies on; System card: helper, execution, learned requests, automation, predictions, scraper; In-play payout card; strategy controls: on/off, paper/approve/auto, reinvest %, settings incl. confidence band and multi legs) · Bet ledger · Matches (model probabilities vs prices) · Stake (helper, balance, switches, learned requests, approvals, Your Stake bets + cash-out, outcomes) · Models (backtest metrics, calibration, simulated bets) · Data sources · Scraper (runs, live log, items) · Identity review. Pages marked P2–P4 in the sidebar are not built yet.
 
 ---
 

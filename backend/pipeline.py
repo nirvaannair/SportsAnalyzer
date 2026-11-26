@@ -84,4 +84,13 @@ async def predict_and_store(session: AsyncSession, as_of: date) -> dict[str, int
         preds = predictions[model]
         await _store(session, model, "live", preds, {}, {}, trained_until=as_of)
         counts[model] = len(preds)
+    # Trained ML models (saved by backend.training), if any have been trained yet.
+    from backend.training import ml_live_predictions
+    try:
+        ml = await ml_live_predictions(matches, as_of)
+    except ImportError:  # xgboost / torch not installed
+        ml = {}
+    for model, preds in ml.items():
+        await _store(session, model, "live", preds, {}, {}, trained_until=as_of)
+        counts[model] = len(preds)
     return counts
