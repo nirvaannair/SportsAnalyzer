@@ -76,3 +76,16 @@ async def db_session(test_database_url: str | None) -> AsyncIterator[AsyncSessio
             await session.close()
             await transaction.rollback()
     await engine.dispose()
+
+
+@pytest.fixture
+def settings_override(monkeypatch):
+    """Override values from config/settings.toml for one test, e.g.
+    settings_override({"training": {"xgb": {"rounds": 60}}})."""
+    from backend.core import settings as settings_module
+
+    def apply(patch):
+        merged = settings_module.deep_merge(settings_module.settings(), patch)
+        monkeypatch.setattr(settings_module, "settings", lambda: merged)
+
+    return apply

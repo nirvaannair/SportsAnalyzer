@@ -21,6 +21,7 @@ from typing import Any
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.core.settings import cfg
 from backend.database.models import (
     Competition,
     Match,
@@ -47,9 +48,6 @@ from backend.strategies.core import (
     won,
 )
 
-MIN_MINUTES_BEFORE_KICKOFF = 10
-LOOKAHEAD_DAYS = 4
-STAKE_PRICE_MAX_AGE = timedelta(hours=6)
 REAL_MODES = ("approve", "auto")
 
 
@@ -63,11 +61,11 @@ async def upcoming_predictions(session: AsyncSession, model: str) -> list[dict[s
         .join(Match, Match.id == Prediction.match_id)
         .join(Competition, Competition.id == Match.competition_id)
         .where(ModelRun.model == model, ModelRun.kind == "live", Match.status == "scheduled",
-               Match.match_date.between(date.today(), date.today() + timedelta(days=LOOKAHEAD_DAYS)))
+               Match.match_date.between(date.today(), date.today() + timedelta(days=cfg("strategies.lookahead_days"))))
     )).all()
     out = []
     for p, m, league in rows:
-        if m.kickoff_at and m.kickoff_at < now + timedelta(minutes=MIN_MINUTES_BEFORE_KICKOFF):
+        if m.kickoff_at and m.kickoff_at < now + timedelta(minutes=cfg("strategies.min_minutes_before_kickoff")):
             continue
         out.append({"match_id": m.id, "league": league, "p": {
             ("1x2", "home"): p.p_home, ("1x2", "draw"): p.p_draw, ("1x2", "away"): p.p_away,
@@ -86,7 +84,7 @@ async def stake_prices(session: AsyncSession, match_ids: list[int]) -> dict[tupl
                StakeOutcome.price, StakeOutcome.outcome_id)
         .join(StakeFixture, StakeFixture.id == StakeOutcome.stake_fixture_id)
         .where(StakeFixture.match_id.in_(match_ids), StakeOutcome.selection.is_not(None),
-               StakeOutcome.active.is_(True), StakeOutcome.seen_at >= datetime.now(UTC) - STAKE_PRICE_MAX_AGE)
+               StakeOutcome.active.is_(True), StakeOutcome.seen_at >= datetime.now(UTC) - timedelta(hours=cfg("strategies.stake_price_max_age_hours")))
     )).all()
     out: dict[tuple, tuple[float, str]] = {}
     for match_id, code, specifiers, selection, price, outcome_id in rows:

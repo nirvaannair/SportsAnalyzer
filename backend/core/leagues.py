@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from backend.core.settings import cfg
+
 
 @dataclass(frozen=True, slots=True)
 class League:
@@ -22,18 +24,16 @@ class League:
     espn_slug: str  # ESPN league slug, e.g. "eng.1"
 
 
-LEAGUES: tuple[League, ...] = (
-    League("ENG1", "Premier League", "England", 1, "E0", 39, "Europe/London", "eng.1"),
-    League("ENG2", "Championship", "England", 2, "E1", 40, "Europe/London", "eng.2"),
-    League("ESP1", "La Liga", "Spain", 1, "SP1", 140, "Europe/London", "esp.1"),
-    League("ESP2", "Segunda División", "Spain", 2, "SP2", 141, "Europe/London", "esp.2"),
-    League("ITA1", "Serie A", "Italy", 1, "I1", 135, "Europe/London", "ita.1"),
-    League("ITA2", "Serie B", "Italy", 2, "I2", 136, "Europe/London", "ita.2"),
-    League("GER1", "Bundesliga", "Germany", 1, "D1", 78, "Europe/London", "ger.1"),
-    League("GER2", "2. Bundesliga", "Germany", 2, "D2", 79, "Europe/London", "ger.2"),
-    League("FRA1", "Ligue 1", "France", 1, "F1", 61, "Europe/London", "fra.1"),
-    League("FRA2", "Ligue 2", "France", 2, "F2", 62, "Europe/London", "fra.2"),
-)
+def _load() -> tuple[League, ...]:
+    """Leagues come from config/settings.toml ([[leagues]]); restart after editing them."""
+    return tuple(
+        League(lg["code"], lg["name"], lg["country"], int(lg["tier"]), lg["fdcuk"], int(lg["api_football"]),
+               lg.get("timezone", "Europe/London"), lg["espn"])
+        for lg in cfg("leagues")
+    )
+
+
+LEAGUES: tuple[League, ...] = _load()
 
 LEAGUES_BY_CODE = {league.code: league for league in LEAGUES}
 LEAGUES_BY_FDCUK = {league.fdcuk_division: league for league in LEAGUES}

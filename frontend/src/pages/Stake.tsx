@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { Badge, Card, CardHeader, EmptyState, PageHeader, StatusDot } from '../components/ui'
 import StakeBets from '../components/StakeBets'
 import { api, type StakeOrder } from '../lib/api'
+import { refresh } from '../lib/settings'
 
 const ORDER_TONE: Record<string, 'ok' | 'warn' | 'off' | 'bad'> = {
   pending_approval: 'warn', approved: 'warn', sent: 'warn', placed: 'ok', failed: 'bad', blocked: 'bad', rejected: 'off',
@@ -66,14 +67,14 @@ function OrderRow({ o }: { o: StakeOrder }) {
 
 export default function Stake() {
   const queryClient = useQueryClient()
-  const status = useQuery({ queryKey: ['stake', 'status'], queryFn: api.stakeStatus, refetchInterval: 3000 })
-  const orders = useQuery({ queryKey: ['stake', 'orders'], queryFn: api.stakeOrders, refetchInterval: 3000 })
+  const status = useQuery({ queryKey: ['stake', 'status'], queryFn: api.stakeStatus, refetchInterval: refresh('live') })
+  const orders = useQuery({ queryKey: ['stake', 'orders'], queryFn: api.stakeOrders, refetchInterval: refresh('live') })
   const [q, setQ] = useState('')
   const [allMarkets, setAllMarkets] = useState(false)
   const outcomes = useQuery({
     queryKey: ['stake', 'outcomes', q, allMarkets],
     queryFn: () => api.stakeOutcomes(q, !allMarkets),
-    refetchInterval: 5000,
+    refetchInterval: refresh('fast'),
   })
   const settings = useMutation({
     mutationFn: api.stakeSettings,

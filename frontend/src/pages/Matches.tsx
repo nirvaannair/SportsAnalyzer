@@ -3,6 +3,7 @@ import { ChevronLeft, ChevronRight } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { Badge, Card, CardHeader, PageHeader } from '../components/ui'
 import { api, type MatchRow } from '../lib/api'
+import { leagues } from '../lib/settings'
 
 const PAGE = 50
 
@@ -106,7 +107,7 @@ function GoalsCell({ m }: { m: MatchRow }) {
 
 export default function Matches() {
   const competitions = useQuery({ queryKey: ['competitions'], queryFn: api.competitions })
-  const [league, setLeague] = useState('ENG1')
+  const [league, setLeague] = useState(() => leagues()[0]?.code ?? '')
   const [season, setSeason] = useState<number | null>(null)
   const [page, setPage] = useState(0)
 

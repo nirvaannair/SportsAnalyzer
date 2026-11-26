@@ -1,10 +1,8 @@
-"""The free API providers the background collector uses, their free-plan limits, and what to fetch.
+"""The free API providers the background collector uses and what to fetch from each.
 
-Every provider is used on its FREE plan only. Each has:
-  * a minimum gap between requests (below the plan's per-minute limit), and
-  * a default daily budget (below the plan's daily limit, leaving headroom for manual use).
-The owner can switch each provider on/off and change its daily budget on the Data Sources page.
-
+Everything about a provider (address, free-plan limits, budgets, seasons, league IDs, key
+names) comes from config/settings.toml under [collector.providers.*] and [[leagues]];
+this module only knows HOW to turn those settings into a queue of requests.
 Odds endpoints are never requested: the models must not learn from bookmaker odds.
 """
 
@@ -12,11 +10,11 @@ from __future__ import annotations
 
 import os
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import date
 from typing import Any
 
-from backend.core.leagues import LEAGUES
+from backend.core.settings import cfg
 
 
 @dataclass(frozen=True)
@@ -28,23 +26,42 @@ class TaskSpec:
     priority: int
 
 
+def _season_start(today: date | None = None) -> int:
+    """European seasons start in July/August: Nov 2026 -> 2026, Mar 2027 -> 2026."""
+    today = today or date.today()
+    return today.year if today.month >= 7 else today.year - 1
+
+
+def _season_label(season: int) -> str:
+    return f"{season}/{(season + 1) % 100:02d}"
+
+
 @dataclass(frozen=True)
 class Provider:
     name: str
-    label: str
-    base_url: str
-    plan: str  # human description of the free plan
-    min_interval_s: float  # gap between requests
-    plan_daily_limit: int | None  # None = no published daily cap
-    default_daily_budget: int
-    key_env: str | None  # .env variable holding the key (None = no key needed)
-    key_header: str | None
-    collects: str
-    signup_url: str | None = None
-    planner: Callable[[], list[TaskSpec]] = field(default=lambda: [])
+    planner: Callable[[], list[TaskSpec]]
+
+    @property
+    def settings(self) -> dict[str, Any]:
+        return cfg(f"collector.providers.{self.name}")
+
+    def __getattr__(self, item: str) -> Any:  # label, base_url, plan, min_interval_seconds, ...
+        try:
+            return self.settings[item]
+        except KeyError:
+            if item in ("key_env", "key_header", "signup_url", "plan_daily_limit"):
+                return None
+            raise AttributeError(item) from None
+
+    @property
+    def min_interval_s(self) -> float:
+        return float(self.settings["min_interval_seconds"])
 
     def key(self) -> str | None:
-        return os.getenv(self.key_env) if self.key_env else None
+        if self.key_env:
+            return os.getenv(self.key_env)
+        optional = self.settings.get("key_env_optional")
+        return (os.getenv(optional) if optional else None) or self.settings.get("default_key")
 
     def configured(self) -> bool:
         return self.key_env is None or bool((self.key() or "").strip())
@@ -55,111 +72,66 @@ class Provider:
         return {}
 
 
-def _season_start(today: date | None = None) -> int:
-    today = today or date.today()
-    return today.year if today.month >= 7 else today.year - 1
-
-
-# --- API-Football (api-sports.io) ------------------------------------------
-# Free plan: 100 requests/day, 10/minute, seasons 2022-2024 only (no current season).
-API_FOOTBALL_SEASONS = (2024, 2023, 2022)
-
+# --- planners: which requests each provider should get -------------------------------------------
 
 def _api_football_tasks() -> list[TaskSpec]:
     tasks = []
-    for season in API_FOOTBALL_SEASONS:
-        for lg in LEAGUES:
-            p = {"league": lg.api_football_id, "season": season}
-            tasks.append(TaskSpec("injuries", "injuries", p, f"Injuries {lg.name} {season}/{(season + 1) % 100:02d}", 10))
-            tasks.append(TaskSpec("fixtures", "fixtures", p, f"Fixtures {lg.name} {season}/{(season + 1) % 100:02d}", 20))
+    for season in cfg("collector.providers.api_football.seasons"):
+        for lg in cfg("leagues"):
+            p = {"league": lg["api_football"], "season": season}
+            label = f"{lg['name']} {_season_label(season)}"
+            tasks.append(TaskSpec("injuries", "injuries", p, f"Injuries {label}", 10))
+            tasks.append(TaskSpec("fixtures", "fixtures", p, f"Fixtures {label}", 20))
     # Per-fixture player stats are added by expand_followups() once fixture lists are in.
     return tasks
 
 
-# --- football-data.org --------------------------------------------------------
-# Free plan: 10 requests/minute, 12 competitions incl. the Champions League (cross-league
-# matches!). A free key is needed: https://www.football-data.org/client/register
-FOOTBALL_DATA_COMPETITIONS = {"PL": "Premier League", "ELC": "Championship", "PD": "La Liga",
-                              "SA": "Serie A", "BL1": "Bundesliga", "FL1": "Ligue 1",
-                              "CL": "Champions League", "EC": "European Championship"}
-
-
 def _football_data_tasks() -> list[TaskSpec]:
-    tasks = []
+    settings = cfg("collector.providers.football_data_org")
+    competitions = {lg["football_data_org"]: lg["name"] for lg in cfg("leagues") if lg.get("football_data_org")}
+    competitions.update(settings.get("extra_competitions", {}))
     current = _season_start()
-    for code, name in FOOTBALL_DATA_COMPETITIONS.items():
-        tasks.append(TaskSpec("teams", f"v4/competitions/{code}/teams", {"season": current},
-                              f"Squads {name} {current}/{(current + 1) % 100:02d}", 10))
-        for season in range(current, current - 3, -1):  # the free plan serves recent seasons
-            tasks.append(TaskSpec("matches", f"v4/competitions/{code}/matches", {"season": season},
-                                  f"Matches {name} {season}/{(season + 1) % 100:02d}", 20 if season == current else 30))
-    return tasks
-
-
-# --- OpenLigaDB (Germany) -------------------------------------------------------
-# Free, no key, community-run: goal minutes and scorers for Bundesliga and 2. Bundesliga.
-def _openligadb_tasks() -> list[TaskSpec]:
     tasks = []
-    for shortcut, name in (("bl1", "Bundesliga"), ("bl2", "2. Bundesliga")):
-        for season in range(_season_start(), 2014, -1):
-            tasks.append(TaskSpec("matches", f"getmatchdata/{shortcut}/{season}", {},
-                                  f"Matches {name} {season}/{(season + 1) % 100:02d}", 20))
+    for code, name in competitions.items():
+        tasks.append(TaskSpec("teams", f"v4/competitions/{code}/teams", {"season": current},
+                              f"Squads {name} {_season_label(current)}", 10))
+        for season in range(current, current - settings["seasons_back"], -1):
+            tasks.append(TaskSpec("matches", f"v4/competitions/{code}/matches", {"season": season},
+                                  f"Matches {name} {_season_label(season)}", 20 if season == current else 30))
     return tasks
 
 
-# --- TheSportsDB ------------------------------------------------------------------
-# Free test key "123": about 30 requests/minute; team and venue metadata.
-THESPORTSDB_LEAGUES = {"ENG1": 4328, "ENG2": 4329, "ESP1": 4335, "ESP2": 4400, "ITA1": 4332,
-                       "ITA2": 4394, "GER1": 4331, "GER2": 4399, "FRA1": 4334, "FRA2": 4401}
+def _openligadb_tasks() -> list[TaskSpec]:
+    shortcuts = cfg("collector.providers.openligadb.league_shortcuts")
+    names = {lg["code"]: lg["name"] for lg in cfg("leagues")}
+    first = date.fromisoformat(cfg("scraper.history_start")).year
+    tasks = []
+    for code, shortcut in shortcuts.items():
+        for season in range(_season_start(), first - 1, -1):
+            tasks.append(TaskSpec("matches", f"getmatchdata/{shortcut}/{season}", {},
+                                  f"Matches {names.get(code, code)} {_season_label(season)}", 20))
+    return tasks
 
 
 def _thesportsdb_tasks() -> list[TaskSpec]:
-    names = {lg.code: lg.name for lg in LEAGUES}
-    key = os.getenv("THESPORTSDB_API_KEY") or "123"
-    return [TaskSpec("teams", f"{key}/lookup_all_teams.php", {"id": league_id}, f"Teams {names[code]}", 10)
-            for code, league_id in THESPORTSDB_LEAGUES.items()]
+    provider = PROVIDERS["thesportsdb"]
+    return [TaskSpec("teams", f"{provider.key()}/lookup_all_teams.php", {"id": lg["thesportsdb"]}, f"Teams {lg['name']}", 10)
+            for lg in cfg("leagues") if lg.get("thesportsdb")]
 
 
-PROVIDERS: dict[str, Provider] = {p.name: p for p in (
-    Provider(
-        name="api_football", label="API-Football", base_url="https://v3.football.api-sports.io",
-        plan="Free: 100 requests/day, 10/minute, seasons 2022–2024", min_interval_s=7.0,
-        plan_daily_limit=100, default_daily_budget=90, key_env="API_FOOTBALL_API_KEY",
-        key_header="x-apisports-key", signup_url="https://dashboard.api-football.com/register",
-        collects="Injuries per league and season, fixture lists, then per-match player stats (minutes, "
-                 "rating, shots, passes, duels) for every fixture, newest first.",
-        planner=_api_football_tasks,
-    ),
-    Provider(
-        name="football_data_org", label="football-data.org", base_url="https://api.football-data.org",
-        plan="Free: 10 requests/minute, 12 competitions incl. Champions League", min_interval_s=7.0,
-        plan_daily_limit=None, default_daily_budget=500, key_env="FOOTBALL_DATA_API_KEY",
-        key_header="X-Auth-Token", signup_url="https://www.football-data.org/client/register",
-        collects="Squads and matches for the top divisions plus the Champions League and Euros, "
-                 "which link teams across leagues.",
-        planner=_football_data_tasks,
-    ),
-    Provider(
-        name="openligadb", label="OpenLigaDB", base_url="https://api.openligadb.de",
-        plan="Free, no key (community project; we keep it gentle)", min_interval_s=3.0,
-        plan_daily_limit=None, default_daily_budget=200, key_env=None, key_header=None,
-        collects="Bundesliga and 2. Bundesliga matches 2015 to now with goal minutes and scorers.",
-        planner=_openligadb_tasks,
-    ),
-    Provider(
-        name="thesportsdb", label="TheSportsDB", base_url="https://www.thesportsdb.com/api/v1/json",
-        plan="Free test key: about 30 requests/minute", min_interval_s=3.0,
-        plan_daily_limit=None, default_daily_budget=100, key_env=None, key_header=None,
-        collects="Team metadata (stadium, founded, badges) for the 10 leagues.",
-        planner=_thesportsdb_tasks,
-    ),
-)}
-
-FORBIDDEN_ENDPOINT_WORDS = ("odds", "bookmaker", "bets")
+_PLANNERS: dict[str, Callable[[], list[TaskSpec]]] = {
+    "api_football": _api_football_tasks,
+    "football_data_org": _football_data_tasks,
+    "openligadb": _openligadb_tasks,
+    "thesportsdb": _thesportsdb_tasks,
+}
+# Only providers that are configured in settings are used.
+PROVIDERS: dict[str, Provider] = {name: Provider(name, planner) for name, planner in _PLANNERS.items()
+                                  if name in cfg("collector.providers")}
 
 
 def check_endpoint(endpoint: str) -> None:
     """The collector never asks for odds."""
     lowered = endpoint.lower()
-    if any(word in lowered for word in FORBIDDEN_ENDPOINT_WORDS):
+    if any(word in lowered for word in cfg("collector.forbidden_endpoint_words")):
         raise ValueError(f"Collector refuses odds endpoint {endpoint!r}")

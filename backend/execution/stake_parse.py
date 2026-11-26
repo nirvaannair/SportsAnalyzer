@@ -15,23 +15,14 @@ from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
 from typing import Any
 
+from backend.core.settings import cfg
+
+
 # (country, tournament name, lowercase) -> our league code
-LEAGUE_BY_STAKE_NAME: dict[tuple[str, str], str] = {
-    ("england", "premier league"): "ENG1",
-    ("england", "championship"): "ENG2",
-    ("spain", "laliga"): "ESP1",
-    ("spain", "la liga"): "ESP1",
-    ("spain", "laliga 2"): "ESP2",
-    ("spain", "laliga hypermotion"): "ESP2",
-    ("spain", "segunda division"): "ESP2",
-    ("italy", "serie a"): "ITA1",
-    ("italy", "serie b"): "ITA2",
-    ("germany", "bundesliga"): "GER1",
-    ("germany", "2. bundesliga"): "GER2",
-    ("germany", "2nd bundesliga"): "GER2",
-    ("france", "ligue 1"): "FRA1",
-    ("france", "ligue 2"): "FRA2",
-}
+def _stake_names() -> dict[tuple[str, str], str]:
+    """(country, Stake's tournament name) -> league code, from the leagues' stake_names in settings."""
+    return {(lg["country"].lower(), name.lower()): lg["code"]
+            for lg in cfg("leagues") for name in lg.get("stake_names", [])}
 
 MARKET_1X2, MARKET_TOTAL, MARKET_BTTS = "1", "18", "29"
 
@@ -39,7 +30,7 @@ MARKET_1X2, MARKET_TOTAL, MARKET_BTTS = "1", "18", "29"
 def league_code(country: str | None, tournament: str | None) -> str | None:
     if not country or not tournament:
         return None
-    return LEAGUE_BY_STAKE_NAME.get((country.strip().lower(), tournament.strip().lower()))
+    return _stake_names().get((country.strip().lower(), tournament.strip().lower()))
 
 
 def parse_start(value: str | None) -> datetime | None:

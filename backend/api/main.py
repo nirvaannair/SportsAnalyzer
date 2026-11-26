@@ -22,25 +22,18 @@ from backend.api.routes_data import router as data_router
 from backend.api.routes_news import router as news_router
 from backend.api.routes_players import router as players_router
 from backend.api.routes_scraper import router as scraper_router
+from backend.api.routes_settings import router as settings_router
 from backend.api.routes_stake import router as stake_router
 from backend.api.routes_strategies import router as strategies_router
 from backend.api.routes_training import router as training_router
 from backend.core.config import ENV_FILE
+from backend.core.settings import cfg
 from backend.database.engine import AsyncSessionFactory, dispose_database_engine
 from backend.database.models import RawProviderObservation
 
 # Provider adapters read os.environ directly, so expose .env to them.
 load_dotenv(ENV_FILE)
 
-# Providers we plan to support, and the env var that holds each key.
-PROVIDERS: list[dict[str, str]] = [
-    {"name": "fdcuk", "label": "football-data.co.uk", "key_env": ""},  # no key needed
-    {"name": "api_football", "label": "API-Football", "key_env": "API_FOOTBALL_API_KEY"},
-    {"name": "football_data", "label": "football-data.org", "key_env": "FOOTBALL_DATA_API_KEY"},
-    {"name": "thesportsdb", "label": "TheSportsDB", "key_env": "THESPORTSDB_API_KEY"},
-    {"name": "odds_api", "label": "The Odds API", "key_env": "ODDS_API_KEY"},
-    {"name": "stake", "label": "Stake", "key_env": "STAKE_ACCESS_TOKEN"},
-]
 
 
 @asynccontextmanager
@@ -72,6 +65,7 @@ app.include_router(training_router)
 app.include_router(collector_router)
 app.include_router(players_router)
 app.include_router(news_router)
+app.include_router(settings_router)
 
 
 @app.middleware("http")
@@ -130,5 +124,5 @@ async def providers() -> list[dict[str, object]]:
             "observations": counts.get(p["name"], 0),
             "last_received_at": last_seen.get(p["name"]),
         }
-        for p in PROVIDERS
+        for p in cfg("app.data_sources")
     ]

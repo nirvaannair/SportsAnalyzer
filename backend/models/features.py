@@ -15,16 +15,15 @@ import re
 import numpy as np
 import pandas as pd
 
+from backend.core.settings import cfg
 from backend.models.data import OddsLeakError, assert_odds_free
 from backend.models.elo import pre_match_ratings
 from backend.models.players import PLAYER_FEATURES, player_features
 
 # Per-team stats tracked over recent matches (for = scored by the team, against = conceded).
 _TEAM_STATS = ("gf", "ga", "sf", "sa", "stf", "sta", "cf", "ca", "pts")
-_WINDOWS = (5, 10)
-_EWM_HALFLIFE = 8  # matches
 SIDE_FEATURES: tuple[str, ...] = (
-    *(f"{stat}_l{w}" for w in _WINDOWS for stat in _TEAM_STATS),
+    *(f"{stat}_l{w}" for w in cfg("features.form_windows") for stat in _TEAM_STATS),
     *(f"{stat}_ewm" for stat in ("gf", "ga", "stf", "sta", "pts")),
     "venue_gf_l5", "venue_ga_l5", "venue_pts_l5",  # home form for the home team, away form for the away team
     "rest_days", "played_season", "played_total", "elo",
@@ -52,11 +51,12 @@ def apply_feature_groups(feats: pd.DataFrame, enabled: dict[str, bool]) -> pd.Da
     return feats
 
 
-def _news_features(matches: pd.DataFrame, news: pd.DataFrame, days: int = 7) -> pd.DataFrame:
+def _news_features(matches: pd.DataFrame, news: pd.DataFrame, days: int | None = None) -> pd.DataFrame:
     """Per team, news published in the `days` before the match day (strictly before it)."""
     columns = ["match_id", *(f"{side}_{f}" for side in ("home", "away") for f in NEWS_FEATURES)]
     if news is None or news.empty:
         return pd.DataFrame(columns=columns)
+    days = days or cfg("news.feature_days")
     out = {"match_id": matches["match_id"].to_numpy()}
     news = news.sort_values("published_at")
     by_team = {}
@@ -93,7 +93,7 @@ FEATURE_COLUMNS: tuple[str, ...] = (
     *MATCH_FEATURES,
 )
 TARGET_COLUMNS: tuple[str, ...] = ("y_1x2", "y_over25", "y_btts", "home_goals", "away_goals")
-LEAGUE_CODES = ("ENG1", "ENG2", "ESP1", "ESP2", "ITA1", "ITA2", "GER1", "GER2", "FRA1", "FRA2")
+LEAGUE_CODES = tuple(lg["code"] for lg in cfg("leagues"))
 
 _ODDS_PATTERN = re.compile(r"odd|price|implied|market|bookmaker|b365|pinnacle|closing|margin", re.I)
 
@@ -132,8 +132,7 @@ def _rolling_prior(grouped, column: str, window: int) -> pd.Series:
     return grouped[column].transform(lambda s: s.shift(1).rolling(window, min_periods=1).mean())
 
 
-def _strength_ratings(matches: pd.DataFrame, home_col: str, away_col: str, prefix: str,
-                      k: float = 0.06, k_mu: float = 0.01) -> pd.DataFrame:
+def _strength_ratings(matches: pd.DataFrame, home_col: str, away_col: str, prefix: str) -> pd.DataFrame:
     """Online attack/defence ratings on a count (goals or shots on target), opponent-adjusted.
 
     log E[home count] = mu[league] + home_adv[league] + att[home] - def[away]
@@ -146,7 +145,11 @@ def _strength_ratings(matches: pd.DataFrame, home_col: str, away_col: str, prefi
     dfn: dict[int, float] = {}
     mu: dict[str, float] = {}
     home_adv: dict[str, float] = {}
-    tier_start = {1: 0.0, 2: -0.25}
+    k, k_mu = cfg("features.rating_k"), cfg("features.rating_k_mu")
+    tier_start = {int(t): float(v) for t, v in cfg("features.rating_tier_start").items()}
+    lowest = min(tier_start.values())
+    start_level = cfg("features.rating_start_goals") if prefix == "" else cfg("features.rating_start_shots_on_target")
+    home_start = cfg("features.rating_home_advantage_start")
     ordered = matches.sort_values(["date", "match_id"])
     n = len(ordered)
     out = {f"home_{prefix}att": np.empty(n), f"home_{prefix}def": np.empty(n),
@@ -155,12 +158,12 @@ def _strength_ratings(matches: pd.DataFrame, home_col: str, away_col: str, prefi
     hv, av = ordered[home_col].to_numpy(dtype=float), ordered[away_col].to_numpy(dtype=float)
     for i, row in enumerate(ordered.itertuples(index=False)):
         league = row.league
-        start = tier_start.get(row.tier, -0.25)
+        start = tier_start.get(row.tier, lowest)
         for team in (row.home_id, row.away_id):
             att.setdefault(team, start)
             dfn.setdefault(team, start)
-        m = mu.setdefault(league, float(np.log(1.3 if prefix == "" else 4.2)))
-        h = home_adv.setdefault(league, 0.2)
+        m = mu.setdefault(league, float(np.log(start_level)))
+        h = home_adv.setdefault(league, home_start)
         a_h, d_h, a_a, d_a = att[row.home_id], dfn[row.home_id], att[row.away_id], dfn[row.away_id]
         exp_h, exp_a = np.exp(m + h + a_h - d_a), np.exp(m + a_a - d_h)
         out[f"home_{prefix}att"][i], out[f"home_{prefix}def"][i] = a_h, d_h
@@ -180,8 +183,9 @@ def _strength_ratings(matches: pd.DataFrame, home_col: str, away_col: str, prefi
     return frame.rename(columns={"exp_home": f"rating_{label}_home", "exp_away": f"rating_{label}_away"})
 
 
-def _head_to_head(matches: pd.DataFrame, last: int = 6) -> pd.DataFrame:
+def _head_to_head(matches: pd.DataFrame) -> pd.DataFrame:
     """Previous meetings of the same two teams (either venue), from the home side's view."""
+    last = cfg("features.head_to_head_meetings")
     history: dict[tuple[int, int], list[tuple[float, float]]] = {}
     rows = []
     for m in matches.sort_values(["date", "match_id"]).itertuples(index=False):
@@ -211,18 +215,18 @@ def build_features(matches: pd.DataFrame, lineups: pd.DataFrame | None = None,
     by_team = long.groupby("team", sort=False)
 
     feats = long[["match_id", "team", "is_home"]].copy()
-    for w in _WINDOWS:
+    for w in cfg("features.form_windows"):
         for stat in _TEAM_STATS:
             feats[f"{stat}_l{w}"] = _rolling_prior(by_team, stat, w)
     for stat in ("gf", "ga", "stf", "sta", "pts"):
         feats[f"{stat}_ewm"] = by_team[stat].transform(
-            lambda s: s.shift(1).ewm(halflife=_EWM_HALFLIFE, ignore_na=True).mean())
+            lambda s: s.shift(1).ewm(halflife=cfg("features.ewm_halflife_matches"), ignore_na=True).mean())
 
     by_venue = long.groupby(["team", "is_home"], sort=False)
     for stat in ("gf", "ga", "pts"):
-        feats[f"venue_{stat}_l5"] = _rolling_prior(by_venue, stat, 5)
+        feats[f"venue_{stat}_l5"] = _rolling_prior(by_venue, stat, cfg("features.venue_window"))
 
-    feats["rest_days"] = by_team["date"].diff().dt.days.clip(upper=30).astype(float)
+    feats["rest_days"] = by_team["date"].diff().dt.days.clip(upper=cfg("features.rest_days_cap")).astype(float)
     played = long["gf"].notna().astype(float)
     feats["played_total"] = played.groupby(long["team"]).transform(lambda s: s.shift(1).cumsum()).fillna(0)
     feats["played_season"] = played.groupby([long["team"], long["season"]]).transform(
@@ -256,8 +260,9 @@ def build_features(matches: pd.DataFrame, lineups: pd.DataFrame | None = None,
     out["elo_diff"] = out["home_elo"] - out["away_elo"]
     out["tier"] = out["tier"].astype(float)
     out["month"] = out["date"].dt.month.astype(float)
-    # Share of a typical season played so far (46 matches in second tiers like ENG2, ~38 elsewhere).
-    out["season_progress"] = ((out["home_played_season"] + out["away_played_season"]) / 2 / 40).clip(upper=1.2)
+    # Share of a typical season played so far.
+    out["season_progress"] = ((out["home_played_season"] + out["away_played_season"]) / 2
+                              / cfg("features.season_length_matches"))
     out["league_code"] = out["league"].map({c: i for i, c in enumerate(LEAGUE_CODES)}).fillna(-1).astype(float)
 
     hg, ag = out["home_goals"].astype(float), out["away_goals"].astype(float)

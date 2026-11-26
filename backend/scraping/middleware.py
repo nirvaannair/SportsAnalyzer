@@ -12,12 +12,10 @@ import logging
 
 from twisted.internet import reactor
 
+from backend.core.settings import cfg
+
 log = logging.getLogger(__name__)
 
-WAIT_CODES = (429, 503)
-FIRST_WAIT_S = 60.0
-MAX_WAIT_S = 15 * 60.0
-MAX_WAITS_PER_REQUEST = 12  # about 2.5 hours of waiting for one page before giving up on it
 
 
 def retry_after_seconds(value: bytes | str | None) -> float | None:
@@ -33,7 +31,7 @@ def retry_after_seconds(value: bytes | str | None) -> float | None:
 class RateLimitWaitMiddleware:
     def __init__(self, crawler) -> None:
         self.crawler = crawler
-        self.wait_s = FIRST_WAIT_S
+        self.wait_s = cfg("scraper.rate_limit.first_wait_seconds")
         self.paused = False
 
     @classmethod
@@ -41,16 +39,17 @@ class RateLimitWaitMiddleware:
         return cls(crawler)
 
     def process_response(self, request, response, spider):
-        if response.status not in WAIT_CODES:
-            self.wait_s = FIRST_WAIT_S  # the site is happy again
+        if response.status not in cfg("scraper.rate_limit.wait_codes"):
+            self.wait_s = cfg("scraper.rate_limit.first_wait_seconds")  # the site is happy again
             return response
         waits = request.meta.get("rate_limit_waits", 0)
-        if waits >= MAX_WAITS_PER_REQUEST:
+        if waits >= cfg("scraper.rate_limit.max_waits_per_page"):
             log.warning("Still rate limited after %d waits, giving up on %s", waits, request.url)
             return response
         delay = retry_after_seconds(response.headers.get("Retry-After")) or self.wait_s
-        delay = min(delay, MAX_WAIT_S)
-        self.wait_s = min(self.wait_s * 2, MAX_WAIT_S)
+        ceiling = cfg("scraper.rate_limit.max_wait_seconds")
+        delay = min(delay, ceiling)
+        self.wait_s = min(self.wait_s * 2, ceiling)
         self._pause(delay, response.status)
         self.crawler.stats.inc_value("rate_limit_waits")
         retry = request.replace(dont_filter=True)

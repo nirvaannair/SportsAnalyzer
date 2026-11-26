@@ -10,6 +10,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import aliased
 
 from backend.core.leagues import LEAGUES_BY_CODE
+from backend.core.settings import cfg
 from backend.database.engine import AsyncSessionFactory
 from backend.database.models import AppSetting, Match, StakeOrder, Strategy, StrategyBet, Team
 from backend.strategies.core import MARKETS
@@ -17,16 +18,6 @@ from backend.strategies.engine import run_cycle, strategy_bankroll
 
 router = APIRouter(prefix="/api/strategies")
 
-DEFAULTS = [
-    {"name": "Steady (flat 2%)", "kind": "flat", "stake_pct": 2, "reinvest_pct": 0, "min_edge": 0.05},
-    {"name": "Compounder (flat 2%, reinvest 100%)", "kind": "flat", "stake_pct": 2, "reinvest_pct": 100,
-     "min_edge": 0.05},
-    {"name": "Kelly quarter", "kind": "kelly", "kelly_fraction": 0.25, "reinvest_pct": 50, "min_edge": 0.07},
-    {"name": "Value outsiders (20-50%)", "kind": "flat", "stake_pct": 1, "reinvest_pct": 50, "min_edge": 0.08,
-     "min_prob": 0.2, "max_prob": 0.5},
-    {"name": "Treble (3-leg multi)", "kind": "multi", "multi_legs": 3, "stake_pct": 1, "reinvest_pct": 100,
-     "min_edge": 0.1, "min_prob": 0.4, "max_prob": 0.85},
-]
 
 
 def _json(s: Strategy) -> dict[str, Any]:
@@ -40,7 +31,7 @@ def _json(s: Strategy) -> dict[str, Any]:
 async def _ensure_defaults(session) -> None:
     """Add any starter strategy that doesn't exist yet (all off, paper mode)."""
     existing = set((await session.execute(select(Strategy.name))).scalars())
-    missing = [d for d in DEFAULTS if d["name"] not in existing]
+    missing = [dict(d) for d in cfg("strategies.starters") if d["name"] not in existing]
     if not missing:
         return
     for d in missing:

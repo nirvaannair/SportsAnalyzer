@@ -16,10 +16,10 @@ import pandas as pd
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.core.settings import cfg
 from backend.database.models import OddsQuote
 
 EPS = 1e-12
-EDGE_THRESHOLDS = (0.03, 0.05, 0.10)
 
 
 def _outcomes(results: pd.DataFrame) -> np.ndarray:
@@ -45,8 +45,9 @@ def score_1x2(probs: np.ndarray, outcome: np.ndarray) -> dict[str, float]:
     }
 
 
-def calibration(probs: np.ndarray, outcome: np.ndarray, bins: int = 10) -> list[dict[str, float]]:
+def calibration(probs: np.ndarray, outcome: np.ndarray, bins: int | None = None) -> list[dict[str, float]]:
     """Pooled over home/draw/away: within each probability bucket, how often did it happen?"""
+    bins = bins or cfg("evaluation.calibration_bins")
     n = len(outcome)
     onehot = np.zeros_like(probs)
     onehot[np.arange(n), outcome] = 1
@@ -55,7 +56,7 @@ def calibration(probs: np.ndarray, outcome: np.ndarray, bins: int = 10) -> list[
     out = []
     for lo, hi in zip(edges[:-1], edges[1:], strict=True):
         mask = (p >= lo) & (p < hi)
-        if mask.sum() >= 20:
+        if mask.sum() >= cfg("evaluation.calibration_min_count"):
             out.append({"bucket": f"{lo:.1f}-{hi:.1f}", "predicted": float(p[mask].mean()),
                         "observed": float(y[mask].mean()), "count": int(mask.sum())})
     return out
@@ -109,7 +110,7 @@ def simulate_bets(preds: pd.DataFrame, results: pd.DataFrame, prices: pd.DataFra
         merged["p_under25"] = 1 - merged["p_over25"]
 
     out = []
-    for threshold in EDGE_THRESHOLDS:
+    for threshold in cfg("evaluation.edge_thresholds"):
         for market, selections in bets.items():
             staked = profit = 0.0
             for p_col, price_col, won in selections:

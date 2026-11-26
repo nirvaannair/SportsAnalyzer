@@ -13,6 +13,8 @@ import re
 import uuid
 from typing import Any
 
+from backend.core.settings import cfg
+
 _AMOUNT = re.compile(r"^amount$|stake|betAmount", re.I)
 _CURRENCY = re.compile(r"^currency$", re.I)
 _OUTCOME_LIST = re.compile(r"^outcomeIds$", re.I)
@@ -266,7 +268,6 @@ def parse_sport_bets(payload: Any) -> list[dict[str, Any]]:
 # page showed for the owner's two multis on 2026-11-25 (0.83 and 0.91): value ~= potential
 # multiplier / product(current odds of unsettled legs) x 0.9617^legs. It is an ESTIMATE only
 # and is never used to execute a cash-out.
-CASHOUT_LEG_FACTOR = 0.9617
 
 
 def cashout_view(raw: dict[str, Any]) -> dict[str, Any]:
@@ -300,5 +301,5 @@ def cashout_view(raw: dict[str, Any]) -> dict[str, Any]:
         product = 1.0
         for leg in pending:
             product *= leg["current_odds"]
-        estimate = round(potential / product * CASHOUT_LEG_FACTOR ** len(pending), 4)
+        estimate = round(potential / product * cfg("stake.cashout_leg_factor") ** len(pending), 4)
     return {"available": reason is None, "reason": reason, "estimate_multiplier": estimate, "legs": legs}

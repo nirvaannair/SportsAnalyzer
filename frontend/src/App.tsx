@@ -14,12 +14,14 @@ import Ledger from './pages/Ledger'
 import Matches from './pages/Matches'
 import Models from './pages/Models'
 import Scraper from './pages/Scraper'
+import SettingsPage from './pages/Settings'
 import Stake from './pages/Stake'
 import TeamNews from './pages/TeamNews'
 import Training from './pages/Training'
 import Overview from './pages/Overview'
 import Players from './pages/Players'
 import Placeholder from './pages/Placeholder'
+import { refresh } from './lib/settings'
 
 type NavItem = {
   to: string
@@ -55,7 +57,7 @@ const NAV: { section: string; items: NavItem[] }[] = [
       { to: '/sources', label: 'Data sources', icon: Database },
       { to: '/scraper', label: 'Scraper', icon: Bug },
       { to: '/identity', label: 'Identity review', icon: GitMerge },
-      { to: '/settings', label: 'Settings', icon: Settings, phase: 1, blurb: 'Schedules, thresholds and key status.' },
+      { to: '/settings', label: 'Settings', icon: Settings },
     ],
   },
 ]
@@ -64,7 +66,7 @@ function Sidebar() {
   const health = useQuery({ queryKey: ['health'], queryFn: api.health })
   const summary = useQuery({ queryKey: ['summary'], queryFn: api.summary })
   const reviewCount = summary.data?.identity_review ?? 0
-  const stake = useQuery({ queryKey: ['stake', 'status'], queryFn: api.stakeStatus, refetchInterval: 10000 })
+  const stake = useQuery({ queryKey: ['stake', 'status'], queryFn: api.stakeStatus, refetchInterval: refresh('medium') })
   const dbTone = health.isError ? 'bad' : health.data?.database.ok ? 'ok' : health.isLoading ? 'off' : 'bad'
   const dbLabel = health.isError
     ? 'API offline'
@@ -153,6 +155,7 @@ export default function App() {
             <Route path="/training" element={<Training />} />
             <Route path="/players" element={<Players />} />
             <Route path="/news" element={<TeamNews />} />
+            <Route path="/settings" element={<SettingsPage />} />
             <Route path="/scraper" element={<Scraper />} />
             <Route path="/stake" element={<Stake />} />
             <Route path="/ledger" element={<Ledger />} />

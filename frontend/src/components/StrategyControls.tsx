@@ -3,6 +3,7 @@ import { Play, RotateCcw } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { api, type StrategyRow } from '../lib/api'
 import { Badge, Card, CardHeader } from './ui'
+import { refresh } from '../lib/settings'
 
 const rupees = (v: number) => `₹${v.toLocaleString('en-IN', { maximumFractionDigits: 0 })}`
 const MODES: { value: StrategyRow['mode']; label: string; hint: string }[] = [
@@ -172,8 +173,8 @@ function StrategySettings({ s, onSave }: { s: StrategyRow; onSave: (body: Partia
 
 export default function StrategyControls() {
   const queryClient = useQueryClient()
-  const strategies = useQuery({ queryKey: ['strategies'], queryFn: api.strategies, refetchInterval: 10000 })
-  const automation = useQuery({ queryKey: ['automation'], queryFn: api.automation, refetchInterval: 15000 })
+  const strategies = useQuery({ queryKey: ['strategies'], queryFn: api.strategies, refetchInterval: refresh('medium') })
+  const automation = useQuery({ queryKey: ['automation'], queryFn: api.automation, refetchInterval: refresh('normal') })
   const run = useMutation({
     mutationFn: api.runStrategies,
     onSuccess: () => {

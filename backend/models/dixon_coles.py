@@ -17,7 +17,7 @@ The score matrix gives every market at once: 1X2, Over/Under 2.5 and both teams 
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 import pandas as pd
@@ -25,16 +25,15 @@ from scipy.optimize import minimize_scalar
 from scipy.stats import poisson
 from sklearn.linear_model import PoissonRegressor
 
+from backend.core.settings import cfg
 from backend.models.data import assert_odds_free
-
-MAX_GOALS = 10
 
 
 @dataclass
 class DixonColesParams:
-    half_life_days: float = 365.0
-    window_days: int = 3 * 365
-    l2: float = 0.002
+    half_life_days: float = field(default_factory=lambda: cfg("dixon_coles.half_life_days"))
+    window_days: int = field(default_factory=lambda: cfg("dixon_coles.window_days"))
+    l2: float = field(default_factory=lambda: cfg("dixon_coles.l2"))
 
 
 def _tau(x: np.ndarray, y: np.ndarray, lam: np.ndarray, mu: np.ndarray, rho: float) -> np.ndarray:
@@ -136,7 +135,7 @@ class DixonColesModel:
         return lam, mu
 
     def score_matrix(self, lam: float, mu: float) -> np.ndarray:
-        goals = np.arange(MAX_GOALS + 1)
+        goals = np.arange(cfg("dixon_coles.max_goals") + 1)
         matrix = np.outer(poisson.pmf(goals, lam), poisson.pmf(goals, mu))
         x, y = np.meshgrid(goals, goals, indexing="ij")
         matrix *= _tau(x, y, np.full_like(matrix, lam), np.full_like(matrix, mu), self.rho)
@@ -145,7 +144,7 @@ class DixonColesModel:
     def predict(self, home: int, away: int, tier: int) -> dict[str, float]:
         lam, mu = self.expected_goals(home, away, tier)
         m = self.score_matrix(lam, mu)
-        goals = np.arange(MAX_GOALS + 1)
+        goals = np.arange(cfg("dixon_coles.max_goals") + 1)
         total = goals[:, None] + goals[None, :]
         return {
             "p_home": float(np.tril(m, -1).sum()),

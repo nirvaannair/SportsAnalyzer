@@ -13,7 +13,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from dataclasses import dataclass
 
-MIN_STAKE = 1.0  # ₹; Stake's smallest INR bet we use
+from backend.core.settings import cfg
 
 MARKETS = ("1x2", "ou25", "btts")
 SELECTIONS = {"1x2": ("home", "draw", "away"), "ou25": ("over", "under"), "btts": ("yes", "no")}
@@ -69,7 +69,7 @@ def stake_size(kind: str, available: float, p: float, price: float, *, stake_pct
         raw = stake_pct / 100.0 * available
     stake = min(raw, max_stake, available)
     stake = float(int(stake))  # whole rupees
-    return stake if stake >= MIN_STAKE else 0.0
+    return stake if stake >= cfg("strategies.min_stake") else 0.0
 
 
 @dataclass(frozen=True)

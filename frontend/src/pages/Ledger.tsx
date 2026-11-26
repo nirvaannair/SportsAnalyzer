@@ -3,6 +3,7 @@ import { Receipt } from 'lucide-react'
 import { useState } from 'react'
 import { Badge, Card, CardHeader, EmptyState, PageHeader } from '../components/ui'
 import { api } from '../lib/api'
+import { refresh } from '../lib/settings'
 
 const STATUS_TONE: Record<string, 'neutral' | 'accent' | 'warn'> = { open: 'warn', won: 'accent', lost: 'neutral', void: 'neutral' }
 const SELECTION_LABEL: Record<string, string> = {
@@ -12,7 +13,7 @@ const rupees = (v: number) => `₹${v.toLocaleString('en-IN', { maximumFractionD
 
 export default function Ledger() {
   const [status, setStatus] = useState('')
-  const bets = useQuery({ queryKey: ['ledger', status], queryFn: () => api.ledger(status), refetchInterval: 15000 })
+  const bets = useQuery({ queryKey: ['ledger', status], queryFn: () => api.ledger(status), refetchInterval: refresh('normal') })
   const rows = bets.data ?? []
   const settled = rows.filter((b) => b.status === 'won' || b.status === 'lost')
   const profit = settled.reduce((sum, b) => sum + (b.profit ?? 0), 0)

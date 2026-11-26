@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react'
 import { Guide } from '../components/Guide'
 import { Badge, Card, CardHeader, PageHeader, StatusDot } from '../components/ui'
 import { api, type Collector, type CollectorProvider } from '../lib/api'
+import { refresh } from '../lib/settings'
 
 function relative(iso: string | null) {
   if (!iso) return 'Never'
@@ -123,7 +124,7 @@ function ProviderCard({ p, masterOn, onChange }: {
 
 function CollectorPanel() {
   const queryClient = useQueryClient()
-  const collector = useQuery({ queryKey: ['collector'], queryFn: api.collector, refetchInterval: 5000 })
+  const collector = useQuery({ queryKey: ['collector'], queryFn: api.collector, refetchInterval: refresh('fast') })
   const change = useMutation({
     mutationFn: api.setCollector,
     onSuccess: (data: Collector) => {
@@ -164,8 +165,8 @@ function CollectorPanel() {
 }
 
 export default function DataSources() {
-  const providers = useQuery({ queryKey: ['providers'], queryFn: api.providers, refetchInterval: 15000 })
-  const collector = useQuery({ queryKey: ['collector'], queryFn: api.collector, refetchInterval: 5000 })
+  const providers = useQuery({ queryKey: ['providers'], queryFn: api.providers, refetchInterval: refresh('normal') })
+  const collector = useQuery({ queryKey: ['collector'], queryFn: api.collector, refetchInterval: refresh('fast') })
   const c = collector.data
   const on = c?.providers.filter((p) => c.enabled && p.enabled && p.configured) ?? []
   const missingKeys = c?.providers.filter((p) => !p.configured) ?? []

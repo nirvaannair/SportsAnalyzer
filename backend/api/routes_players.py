@@ -10,19 +10,15 @@ import pandas as pd
 from fastapi import APIRouter, HTTPException, Query
 from sqlalchemy import func, select
 
+from backend.core.settings import cfg
 from backend.database.engine import AsyncSessionFactory
 from backend.database.models import Competition, Match, MatchPlayer, Player, Team
 from backend.models.data import load_lineups, load_matches
 from backend.models.players import PlayerRatings, player_features
 
 router = APIRouter(prefix="/api/players")
-CACHE_SECONDS = 600
 _cache: dict[str, Any] = {"at": 0.0, "table": None}
 
-POSITION_GROUP = {"G": "GK"}
-FORMATION = {"GK": 1, "DEF": 4, "MID": 3, "FWD": 3}
-MIN_MINUTES_FOR_XI = 270
-CURRENT_DAYS = 150  # about half a season
 
 
 def position_group(code: str | None) -> str | None:
@@ -40,7 +36,7 @@ def position_group(code: str | None) -> str | None:
 
 async def _table() -> pd.DataFrame:
     """One row per player with ratings and totals. Recomputed at most every 10 minutes."""
-    if _cache["table"] is not None and time.monotonic() - _cache["at"] < CACHE_SECONDS:
+    if _cache["table"] is not None and time.monotonic() - _cache["at"] < cfg("players.cache_seconds"):
         return _cache["table"]
     async with AsyncSessionFactory() as session:
         matches = await load_matches(session)
@@ -89,8 +85,8 @@ async def _table() -> pd.DataFrame:
         # loaded yet (e.g. De Bruyne to Napoli) drops out of his old club's squad this way.
         latest = table["last_played"].max()
         club_latest = table.groupby("team_id")["last_played"].transform("max")
-        recent_for_club = table["last_played"] >= club_latest - pd.Timedelta(days=CURRENT_DAYS)
-        club_active = club_latest >= latest - pd.Timedelta(days=365)
+        recent_for_club = table["last_played"] >= club_latest - pd.Timedelta(days=cfg("players.current_days"))
+        club_active = club_latest >= latest - pd.Timedelta(days=cfg("players.active_club_days"))
         table["current"] = recent_for_club & club_active
         table["last_played"] = table["last_played"].dt.date.astype(str)
     _cache.update(at=time.monotonic(), table=table)
@@ -103,12 +99,12 @@ def _records(frame: pd.DataFrame) -> list[dict[str, Any]]:
 
 @router.get("")
 async def players(league: str | None = None, team_id: int | None = None, q: str | None = None,
-                  min_minutes: int = 450, current: bool = True,
+                  min_minutes: int | None = None, current: bool = True,
                   limit: int = Query(100, le=1000)) -> dict[str, Any]:
     table = await _table()
     if table.empty:
         return {"total": 0, "players": [], "rated_players": 0}
-    view = table[table["minutes"] >= min_minutes]
+    view = table[table["minutes"] >= (cfg("players.list_min_minutes") if min_minutes is None else min_minutes)]
     if current:
         view = view[view["current"]]
     if league:
@@ -141,9 +137,9 @@ async def squad(team_id: int) -> dict[str, Any]:
     members = table[(table["team_id"] == team_id) & table["current"]].sort_values("minutes", ascending=False)
     if members.empty:
         raise HTTPException(404, "No current players for this team")
-    eligible = members[members["minutes"] >= MIN_MINUTES_FOR_XI]
+    eligible = members[members["minutes"] >= cfg("players.min_minutes_for_xi")]
     xi, used = [], set()
-    for group, count in FORMATION.items():
+    for group, count in cfg("players.formation").items():
         pick = eligible[(eligible["position"] == group) & ~eligible["id"].isin(used)].nlargest(count, "impact")
         xi += [{**r, "slot": group} for r in _records(pick)]
         used |= set(pick["id"])
@@ -151,6 +147,5 @@ async def squad(team_id: int) -> dict[str, Any]:
         "team_id": team_id, "team": members["team"].iloc[0], "league": members["league"].iloc[0],
         "squad": _records(members), "best_xi": xi,
         "best_xi_impact": round(sum(p["impact"] for p in xi), 3),
-        "note": "Best XI = the highest with/without impact per position (4-3-3) among current players "
-                "(played for this club in its last ~5 months of matches) with 270+ minutes.",
+        "note": f"Best XI = the highest with/without impact per position ({'-'.join(str(n) for g, n in cfg('players.formation').items() if g != 'GK')}) among current players with {cfg('players.min_minutes_for_xi')}+ minutes.",
     }

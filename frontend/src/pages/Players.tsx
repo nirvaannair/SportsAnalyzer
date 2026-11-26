@@ -4,16 +4,14 @@ import { useState } from 'react'
 import { Guide } from '../components/Guide'
 import { Card, CardHeader, EmptyState, PageHeader } from '../components/ui'
 import { api, type PlayerRow } from '../lib/api'
+import { leagues, setting } from '../lib/settings'
 
-const LEAGUES = [
-  ['', 'All leagues'], ['ENG1', 'Premier League'], ['ENG2', 'Championship'], ['ESP1', 'La Liga'], ['ESP2', 'Segunda'],
-  ['ITA1', 'Serie A'], ['ITA2', 'Serie B'], ['GER1', 'Bundesliga'], ['GER2', '2. Bundesliga'], ['FRA1', 'Ligue 1'], ['FRA2', 'Ligue 2'],
-] as const
 const POSITION: Record<string, string> = { GK: 'Goalkeeper', DEF: 'Defender', MID: 'Midfielder', FWD: 'Forward' }
 const control = 'rounded-lg border border-zinc-200 bg-white px-3 py-1.5 text-sm outline-none focus:border-zinc-400 dark:border-zinc-800 dark:bg-zinc-900'
 
 function Impact({ value }: { value: number }) {
-  const tone = value > 0.15 ? 'text-emerald-600 dark:text-emerald-400' : value < -0.15 ? 'text-rose-600 dark:text-rose-400' : ''
+  const cut = setting<number>('players.impact_highlight')
+  const tone = value > cut ? 'text-emerald-600 dark:text-emerald-400' : value < -cut ? 'text-rose-600 dark:text-rose-400' : ''
   return <span className={`tabular font-medium ${tone}`}>{value > 0 ? '+' : ''}{value.toFixed(2)}</span>
 }
 
@@ -101,7 +99,7 @@ export default function Players() {
   const [q, setQ] = useState('')
   const [team, setTeam] = useState<number | null>(null)
   const [current, setCurrent] = useState(true)
-  const players = useQuery({ queryKey: ['players', league, q, current], queryFn: () => api.players({ league, q, current, min_minutes: 900 }) })
+  const players = useQuery({ queryKey: ['players', league, q, current], queryFn: () => api.players({ league, q, current }) })
   const lineups = useQuery({ queryKey: ['scraper', 'totals'], queryFn: api.scraperTotals })
   const n = lineups.data?.matches_with_lineups ?? 0
 
@@ -121,14 +119,14 @@ export default function Players() {
         },
         {
           title: 'Best XI',
-          body: 'Click a team. The best XI is the highest-impact goalkeeper, 4 defenders, 3 midfielders and 3 forwards who have played at least 270 minutes.',
+          body: `Click a team. The best XI is the highest-impact players per position (${Object.entries(setting<Record<string, number>>('players.formation')).map(([g, n]) => `${n} ${g}`).join(', ')}) among those with at least ${setting<number>('players.min_minutes_for_xi')} minutes.`,
           verdict: 'info',
         },
         {
           title: 'How much player data is there?',
-          body: `${n.toLocaleString('en-IN')} matches have lineups so far (the goal is ~20,000 since 2019). Ratings get more reliable as the scraper fills this in; they feed the models as "starting XI strength" and "regulars missing".`,
-          verdict: n > 15000 ? 'good' : n > 3000 ? 'medium' : 'bad',
-          verdictLabel: n > 15000 ? 'Enough' : 'Still filling',
+          body: `${n.toLocaleString('en-IN')} matches have lineups so far (the history goes back to ${setting<string>('scraper.history_start').slice(0, 4)}). Ratings get more reliable as the scraper fills this in; they feed the models as "starting XI strength" and "regulars missing".`,
+          verdict: n > setting<number>('verdicts.lineups_enough') ? 'good' : n > setting<number>('verdicts.lineups_some') ? 'medium' : 'bad',
+          verdictLabel: n > setting<number>('verdicts.lineups_enough') ? 'Enough' : 'Still filling',
         },
       ]} />
 
@@ -136,7 +134,8 @@ export default function Players() {
         <Card>
           <div className="flex flex-wrap items-center gap-2 border-b border-zinc-100 px-5 py-3 dark:border-zinc-800">
             <select value={league} onChange={(e) => setLeague(e.target.value)} className={control} aria-label="League">
-              {LEAGUES.map(([code, name]) => <option key={code} value={code}>{name}</option>)}
+              <option value="">All leagues</option>
+              {leagues().map((l) => <option key={l.code} value={l.code}>{l.name}</option>)}
             </select>
             <div className="relative">
               <Search className="pointer-events-none absolute left-2.5 top-2 size-4 text-zinc-400" />
@@ -147,7 +146,7 @@ export default function Players() {
               Current players only
             </label>
             <span className="ml-auto text-xs text-zinc-500">
-              {players.data ? `${players.data.total.toLocaleString('en-IN')} players with 900+ minutes · sorted by impact` : '…'}
+              {players.data ? `${players.data.total.toLocaleString('en-IN')} players with ${setting<number>('players.list_min_minutes')}+ minutes · sorted by impact` : '…'}
             </span>
           </div>
           {players.isLoading ? (

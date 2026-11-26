@@ -21,9 +21,8 @@ from dataclasses import dataclass, field
 import numpy as np
 import pandas as pd
 
-SHRINK_90S = 8.0  # ratings start at 0 and need ~8 full matches on and off to move halfway
-HALF_LIFE_DAYS = 365.0
-REGULAR_WINDOW = 6
+from backend.core.settings import cfg
+
 PLAYER_FEATURES: tuple[str, ...] = ("xi_impact", "xi_minutes", "regulars_out", "regulars_out_impact")
 
 
@@ -38,7 +37,7 @@ class _PlayerState:
 
     def decay(self, day: pd.Timestamp) -> None:
         if self.last is not None:
-            factor = 0.5 ** (max(0, (day - self.last).days) / HALF_LIFE_DAYS)
+            factor = 0.5 ** (max(0, (day - self.last).days) / cfg("players.half_life_days"))
             self.on_gd *= factor
             self.on_90s *= factor
             self.off_gd *= factor
@@ -48,8 +47,9 @@ class _PlayerState:
 
     @property
     def impact(self) -> float:
-        on = self.on_gd / (self.on_90s + SHRINK_90S)
-        off = self.off_gd / (self.off_90s + SHRINK_90S)
+        shrink = cfg("players.shrink_90s")
+        on = self.on_gd / (self.on_90s + shrink)
+        off = self.off_gd / (self.off_90s + shrink)
         return on - off
 
 
@@ -97,7 +97,8 @@ def player_features(matches: pd.DataFrame, lineups: pd.DataFrame, goals: pd.Data
     goal_list = _assign_goals(matches, goals)
     by_match = {mid: grp for mid, grp in lineups.groupby("match_id")}
     state: dict[int, _PlayerState] = {}
-    recent: dict[int, deque] = defaultdict(lambda: deque(maxlen=REGULAR_WINDOW))  # team -> [(player, minutes)]
+    window = cfg("players.regular_window_matches")
+    recent: dict[int, deque] = defaultdict(lambda: deque(maxlen=window))  # team -> [(player, minutes)]
     ratings = ratings_out or PlayerRatings()
     rows = []
 

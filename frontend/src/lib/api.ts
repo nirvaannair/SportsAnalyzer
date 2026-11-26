@@ -243,6 +243,8 @@ export type TrainingRun = {
 }
 export type TrainingInfo = {
   gpu: string | null
+  default_first_test_season: number | null
+  default_feature_groups: Record<string, boolean>
   libraries: { xgboost: boolean; torch: boolean }
   models: { name: string; label: string; description: string; saved: boolean }[]
 }
@@ -309,11 +311,16 @@ export const api = {
     const qs = new URLSearchParams(Object.entries(params).filter(([, v]) => v !== undefined && v !== '').map(([k, v]) => [k, String(v)]))
     return request<NewsArticleRow[]>(`/api/news/articles?${qs}`)
   },
+  settings: () => request<{ effective: Record<string, unknown>; defaults: Record<string, unknown>; overrides: Record<string, unknown>; restart_sections: string[] }>('/api/settings'),
+  saveSettings: (values: Record<string, unknown>) =>
+    patch<{ effective: Record<string, unknown>; defaults: Record<string, unknown>; overrides: Record<string, unknown>; restart_sections: string[] }>('/api/settings', { values }),
+  resetSettings: (section: string) =>
+    post<{ effective: Record<string, unknown>; defaults: Record<string, unknown>; overrides: Record<string, unknown>; restart_sections: string[] }>(`/api/settings/reset?section=${encodeURIComponent(section)}`),
   trainingInfo: () => request<TrainingInfo>('/api/training/info'),
   trainingRuns: () => request<TrainingRun[]>('/api/training/runs'),
   trainingRun: (id: number) => request<TrainingRun>(`/api/training/runs/${id}`),
   trainingLog: (id: number) => request<{ lines: string[] }>(`/api/training/runs/${id}/log`),
-  startTraining: (body: { models: string[]; first_test_season: number; feature_groups: Record<string, boolean> }) => post<{ id: number }>('/api/training/runs', body),
+  startTraining: (body: { models: string[]; first_test_season: number | null; feature_groups: Record<string, boolean> }) => post<{ id: number }>('/api/training/runs', body),
   stopTraining: (id: number) => post(`/api/training/runs/${id}/stop`),
   stakeStatus: () => request<StakeStatus>('/api/stake/status'),
   stakeSettings: (body: { execution_enabled?: boolean; learn_mode?: boolean }) => post('/api/stake/settings', body),
