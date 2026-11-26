@@ -166,6 +166,9 @@ features, OpenLigaDB goal minutes, football-data.org CL matches) are part of the
   API: `/api/players`, `/api/players/teams`, `/api/players/teams/{id}`.
 - Fixed 2026-11-26: the ESPN loader crashed when a player appears twice in one match (it stopped every load at that
   match, leaving ~4,000 scraped matches unloaded); it now keeps the entry with the most minutes.
+- **Lineups load every 15 minutes while a crawl runs** (they used to load only when a crawl finished, which for a
+  multi-hour backfill meant nothing for hours). A Postgres advisory lock keeps two loaders from colliding. On
+  2026-11-26 this linked all 10 leagues (67 matches left waiting, down from ~2,000); 7,270 matches have lineups.
 - Squads/best XI only count **current** players: played for that club within ~5 months of its latest match we hold
   (so De Bruyne leaves Man City's squad; he reappears at Napoli once Serie A lineups load).
 - **First test (run #3, England only had lineups, ~16% of matches): player features did NOT help** (Premier League

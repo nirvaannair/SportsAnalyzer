@@ -27,6 +27,8 @@ SETTING_KEY = "scraper_auto"
 BACKFILL_FROM = date(2019, 7, 1)
 RECENT_EVERY = timedelta(hours=6)
 NEWS_EVERY = timedelta(hours=1)
+LOAD_EVERY = timedelta(minutes=15)  # load lineups while a long crawl is still running
+_last_load: dict[str, datetime] = {}
 ACTIVE = ("queued", "running", "loading")
 
 
@@ -101,6 +103,13 @@ async def cycle(session: AsyncSession, today: date | None = None) -> dict[str, A
 
     active = [r for r in runs if r.status in ACTIVE and r.spider == "espn_matches"]
     if active:
+        last = _last_load.get("espn")
+        if active[0].status == "running" and (last is None or datetime.now(UTC) - last >= LOAD_EVERY):
+            from backend.scraping.loaders import load_espn
+
+            _last_load["espn"] = datetime.now(UTC)
+            loaded = await load_espn(session)
+            report["loaded_while_running"] = {k: v for k, v in loaded.items() if k in ("loaded", "waiting_for_links", "skipped")}
         return {**report, "scraper": f"run #{active[0].id} {active[0].status}"}
 
     finished = [r for r in runs if r.status == "finished" and r.spider == "espn_matches"]
