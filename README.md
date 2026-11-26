@@ -101,7 +101,7 @@ then in this folder: `copy .env.example .env` (fill in keys), `python -m venv .v
 | Automation loop in the API: every 15 min settle + strategy bets; every 6 h fixtures + predictions | ✅ | `backend/automation.py` |
 | Betting upgrades: confidence band per strategy, multi strategies (2–6 legs), approval threshold, In-play card (estimated total payout), Your Stake bets with cash-out | ✅ built; **needs three Learn-mode captures** (learned and verified: 4 own bets, ₹254.98 potential payout shown) | `backend/strategies/core.py`, `backend/execution/orders.py`, `routes_stake.py`, extension v0.1.2 |
 | **Trained ML models**: XGBoost (CUDA) + residual neural net (PyTorch CUDA), each global + per-league fine-tuned + "auto" (best per league) + ensemble; Training page with live loss curves | ✅ (see "ML models" below) | `backend/models/features.py`, `backend/models/ml.py`, `backend/training.py`, Training page |
-| **Free-plan API collector**: on/off switch per provider, daily budgets, quota meters, persistent queue | ✅ built; OpenLigaDB switched on as a test; **API-Football off until the owner switches it on** | `backend/collector/`, Data sources page |
+| **Free-plan API collector**: on/off switch per provider, daily budgets, quota meters, persistent queue | ✅ running: API-Football (injuries, then xG + player stats per match, 90 requests/day), OpenLigaDB, TheSportsDB; football-data.org needs a key | `backend/collector/`, Data sources page |
 | Cross-league strength (European cups / domestic cups data) | ⏳ partly: ratings carry across divisions; Champions League matches come from football-data.org once a key is added | |
 | Player pages + player impact model (with/without), player vs opponent style | ⏳ after the backfill finishes | |
 | 3D team style maps | ⏳ | |
@@ -154,10 +154,10 @@ Every response is stored untouched in `raw_provider_observations` first. Odds en
 
 | Provider | Free plan | Collects | Status |
 |---|---|---|---|
-| API-Football | 100/day, 10/min, seasons 2022–2024 | injuries per league-season, fixture lists, then **player stats per fixture** (3,788 queued for 2024/25 so far) | key set; **off: the owner decides when to spend quota** (budget 90/day) |
+| API-Football | 100/day, 10/min, seasons 2022–2024 | injuries per league-season, fixture lists, then **player stats per fixture** (3,788 queued for 2024/25 so far) | **on since 2026-11-26** (budget 90/day): injuries first, then xG (`fixtures/statistics`) and player stats per match |
 | football-data.org | 10/min, 12 competitions incl. Champions League | squads, matches (cross-league via the CL) | **needs a free key**: register at football-data.org, put it in `.env` as `FOOTBALL_DATA_API_KEY`, restart the API |
 | OpenLigaDB | free, no key | Bundesliga + 2. Bundesliga 2015 to now with goal minutes | on |
-| TheSportsDB | test key, ~30/min | team metadata | off |
+| TheSportsDB | test key, ~30/min | team metadata | on |
 
 Parsing: API-Football fixture lists are parsed straight away (teams and fixtures registered, per-fixture follow-ups
 queued). Other responses wait in the raw store; their parsers (player stats → `match_players`, injuries → availability
