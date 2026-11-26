@@ -35,6 +35,8 @@ SIDE_FEATURES: tuple[str, ...] = (
     "news_n7", "news_sentiment7", "news_injury7",
     # recent team match stats (possession, passing, xG...), names from settings
     *(f"ts_{name}_{side}" for name in cfg("features.team_stats") for side in ("for", "against")),
+    # players ruled out / doubtful for this match (API-Football injury lists)
+    *(f"injured_{kind}" for kind in cfg("features.injury_types")),
 )
 NEWS_FEATURES: tuple[str, ...] = ("news_n7", "news_sentiment7", "news_injury7")
 # Team match stats: recent average for the team and conceded to opponents (names from settings).
@@ -45,6 +47,7 @@ FEATURE_GROUPS: dict[str, tuple[str, ...]] = {
     "players": tuple(f"{side}_{f}" for side in ("home", "away") for f in PLAYER_FEATURES),
     "news": tuple(f"{side}_{f}" for side in ("home", "away") for f in NEWS_FEATURES),
     "team_stats": tuple(f"{side}_{f}" for side in ("home", "away") for f in TEAM_STAT_FEATURES),
+    "injuries": tuple(f"{side}_injured_{kind}" for side in ("home", "away") for kind in cfg("features.injury_types")),
 }
 
 
@@ -239,7 +242,7 @@ def _head_to_head(matches: pd.DataFrame) -> pd.DataFrame:
 
 def build_features(matches: pd.DataFrame, lineups: pd.DataFrame | None = None,
                    goal_events: pd.DataFrame | None = None, news: pd.DataFrame | None = None,
-                   team_stats: pd.DataFrame | None = None) -> pd.DataFrame:
+                   team_stats: pd.DataFrame | None = None, injuries: pd.DataFrame | None = None) -> pd.DataFrame:
     """match_id + FEATURE_COLUMNS + targets (targets NaN for unplayed matches).
 
     `lineups`/`goal_events` come from backend.models.data.load_lineups; without them the player
@@ -286,8 +289,13 @@ def build_features(matches: pd.DataFrame, lineups: pd.DataFrame | None = None,
         out = out.merge(_news_features(matches, news), on="match_id", how="left")
     if team_stats is not None and not team_stats.empty:
         out = out.merge(_team_stat_features(matches, team_stats), on="match_id", how="left")
-    optional = [f"{side}_{f}" for side in ("home", "away")
-                for f in (*PLAYER_FEATURES, *NEWS_FEATURES, *TEAM_STAT_FEATURES)]
+    if injuries is not None and not injuries.empty:
+        for side in ("home", "away"):
+            part = injuries.rename(columns={"team_id": f"{side}_id",
+                                            **{k: f"{side}_injured_{k}" for k in cfg("features.injury_types")}})
+            out = out.merge(matches[["match_id", f"{side}_id"]].merge(part, on=["match_id", f"{side}_id"]).drop(
+                columns=[f"{side}_id"]), on="match_id", how="left")
+    optional = [c for group in FEATURE_GROUPS.values() for c in group]
     missing = [c for c in optional if c not in out]
     if missing:  # add all absent groups at once (one concat, not many inserts)
         out = pd.concat([out, pd.DataFrame(np.nan, index=out.index, columns=missing)], axis=1)

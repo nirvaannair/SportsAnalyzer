@@ -9,6 +9,7 @@ Odds and betting words are ignored entirely (we never learn from the market).
 from __future__ import annotations
 
 import re
+from functools import lru_cache
 from typing import Any
 
 from backend.core.settings import cfg
@@ -31,6 +32,28 @@ def _terms(text: str, terms: tuple[str, ...]) -> list[str]:
     return found
 
 
+@lru_cache(maxsize=1)
+def _vader_analyzer():
+    from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
+
+    return SentimentIntensityAnalyzer()
+
+
+def _vader(headline: str, summary: str | None, headline_weight: float) -> float:
+    """VADER compound score (-1..1) of the headline (weighted) and summary, betting words removed."""
+    def clean(text: str) -> str:
+        text = text or ""
+        for word in _words("betting"):
+            text = re.sub(re.escape(word), " ", text, flags=re.I)
+        return text
+
+    head = _vader_analyzer().polarity_scores(clean(headline))["compound"]
+    if not summary:
+        return head
+    body = _vader_analyzer().polarity_scores(clean(summary))["compound"]
+    return (headline_weight * head + body) / (headline_weight + 1)
+
+
 def analyse(headline: str, summary: str | None) -> dict[str, Any]:
     head = (headline or "").lower()
     body = (summary or "").lower()
@@ -40,11 +63,16 @@ def analyse(headline: str, summary: str | None) -> dict[str, Any]:
     pos = _terms(head, _words("positive")) * weight + _terms(body, _words("positive"))
     neg = _terms(head, _words("negative")) * weight + _terms(body, _words("negative"))
     text = f"{head} {body}"
-    score = (len(pos) - len(neg)) / (len(pos) + len(neg) + weight)
+    words_score = (len(pos) - len(neg)) / (len(pos) + len(neg) + weight)
+    vader_score = _vader(headline, summary, weight)
+    weights = cfg("news.sentiment_weights")
+    total = weights["words"] + weights["vader"]
+    score = (weights["words"] * words_score + weights["vader"] * vader_score) / total if total else 0.0
     return {
         "sentiment": round(max(-1.0, min(1.0, score)), 3),
         "injury": bool(_terms(text, _words("injury"))),
         "signals": {
+            "words_score": round(words_score, 3), "vader_score": round(vader_score, 3),
             "positive": sorted(set(pos)), "negative": sorted(set(neg)),
             "injury_terms": sorted(set(_terms(text, _words("injury")))),
             "manager": bool(_terms(text, _words("manager"))), "form": bool(_terms(text, _words("form"))),

@@ -96,6 +96,8 @@ function NewRun({ disabled }: { disabled: boolean }) {
   const [models, setModels] = useState<string[] | null>(null)
   const [first, setFirst] = useState<number | null>(null)
   const [groups, setGroups] = useState<Record<string, boolean> | null>(null)
+  const [auto, setAuto] = useState<boolean | null>(null)
+  const chosenAuto = auto ?? info.data?.auto_select ?? true
   // Defaults come from the API (settings + data); the owner's picks override them.
   const chosenModels = models ?? (info.data?.models.map((m) => m.name) ?? [])
   const chosenFirst = first ?? info.data?.default_first_test_season ?? null
@@ -104,7 +106,7 @@ function NewRun({ disabled }: { disabled: boolean }) {
   const seasons = [...new Set((competitions.data ?? []).flatMap((c) => c.seasons.map((s) => s.start_year)))].sort()
   const seasonOptions = seasons.slice(1, -1)
   const start = useMutation({
-    mutationFn: () => api.startTraining({ models: chosenModels, first_test_season: chosenFirst, feature_groups: chosenGroups }),
+    mutationFn: () => api.startTraining({ models: chosenModels, first_test_season: chosenFirst, feature_groups: chosenGroups, auto_select: chosenAuto }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['training'] }),
   })
   const missing = info.data && (!info.data.libraries.xgboost || !info.data.libraries.torch)
@@ -132,10 +134,14 @@ function NewRun({ disabled }: { disabled: boolean }) {
           ))}
         </div>
         <div className="space-y-1.5 rounded-lg border border-zinc-200 p-3 text-sm dark:border-zinc-800">
-          <div className="text-xs font-medium text-zinc-500 dark:text-zinc-400">Extra inputs (test each on and off)</div>
+          <div className="text-xs font-medium text-zinc-500 dark:text-zinc-400">Extra inputs</div>
+          <label className="flex cursor-pointer items-start gap-2">
+            <input type="checkbox" className="mt-0.5 accent-zinc-900 dark:accent-zinc-100" checked={chosenAuto} onChange={(e) => setAuto(e.target.checked)} />
+            <span><span className="font-medium">Let the training decide</span> <span className="text-xs text-zinc-500 dark:text-zinc-400">Tests each group below on recent seasons and keeps the ones that make predictions better.</span></span>
+          </label>
           {(info.data?.feature_groups ?? []).map(({ name: key, label, about }) => (
-            <label key={key} className="flex cursor-pointer items-start gap-2">
-              <input type="checkbox" className="mt-0.5 accent-zinc-900 dark:accent-zinc-100" checked={Boolean(chosenGroups[key])}
+            <label key={key} className={`flex items-start gap-2 ${chosenAuto ? 'opacity-50' : 'cursor-pointer'}`}>
+              <input type="checkbox" disabled={chosenAuto} className="mt-0.5 accent-zinc-900 dark:accent-zinc-100" checked={Boolean(chosenGroups[key])}
                      onChange={(e) => setGroups({ ...chosenGroups, [key]: e.target.checked })} />
               <span><span className="font-medium">{label}</span> <span className="text-xs text-zinc-500 dark:text-zinc-400">{about}</span></span>
             </label>
@@ -239,12 +245,32 @@ function Results({ run }: { run: TrainingRun }) {
       rows.push({ key: `${family}-${variant}`, label: family === 'ml_ensemble' ? 'Ensemble (XGBoost + neural net)' : `${FAMILY[family]} · ${VARIANT[variant]}`, s })
     }
   }
-  if (rows.length === 0) return null
+  const selection = run.results.feature_selection
+  const selectionCard = selection && (
+    <Card className="mt-6">
+      <CardHeader title="Which data helped (tested before training)" aside={<span className="text-xs text-zinc-500">XGBoost, seasons from {selection.first_season}</span>} />
+      <table className="w-full text-sm">
+        <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
+          <tr><td className="px-5 py-2 text-zinc-500">Without any extra group</td><td className="tabular px-3 py-2 text-right">{num(selection.baseline)}</td><td /><td /></tr>
+          {Object.entries(selection.groups).map(([g, r]) => (
+            <tr key={g}>
+              <td className="px-5 py-2">With {g.replaceAll('_', ' ')}</td>
+              <td className="tabular px-3 py-2 text-right">{num(r.logloss)}</td>
+              <td className={`tabular px-3 py-2 text-right ${r.gain > 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'}`}>{r.gain > 0 ? '−' : '+'}{Math.abs(r.gain).toFixed(4)}</td>
+              <td className="px-5 py-2 text-right"><Badge tone={r.kept ? 'accent' : 'neutral'}>{r.kept ? 'kept' : 'left out'}</Badge></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </Card>
+  )
+  if (rows.length === 0) return selectionCard ?? null
   const best = Math.min(...rows.map((r) => r.s.logloss_1x2))
   const leagueFamilies = run.models.filter((m) => run.results[m]?.leagues)
 
   return (
     <>
+      {selectionCard}
       <Card className="mt-6">
         <CardHeader title="Backtest scores" aside={<span className="text-xs text-zinc-500">Real results · lower log loss = better · compare with Models page</span>} />
         <div className="overflow-x-auto">

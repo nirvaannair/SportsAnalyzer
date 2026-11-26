@@ -19,6 +19,7 @@ from sqlalchemy import func, select, text
 
 from backend.api.routes_collector import router as collector_router
 from backend.api.routes_data import router as data_router
+from backend.api.routes_forward import router as forward_router
 from backend.api.routes_news import router as news_router
 from backend.api.routes_players import router as players_router
 from backend.api.routes_scraper import router as scraper_router
@@ -66,6 +67,7 @@ app.include_router(collector_router)
 app.include_router(players_router)
 app.include_router(news_router)
 app.include_router(settings_router)
+app.include_router(forward_router)
 
 
 @app.middleware("http")

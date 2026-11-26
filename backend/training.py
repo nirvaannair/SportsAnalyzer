@@ -65,7 +65,7 @@ def default_first_test_season() -> int:
 
 
 def create_run(models: list[str], first_test_season: int | None = None,
-               feature_groups: dict[str, bool] | None = None) -> int:
+               feature_groups: dict[str, bool] | None = None, auto_select: bool | None = None) -> int:
     from backend.models.ml import ML_MODELS
 
     unknown = [m for m in models if m not in ML_MODELS]
@@ -77,7 +77,8 @@ def create_run(models: list[str], first_test_season: int | None = None,
         return connection.execute(
             TrainingRun.__table__.insert().values(
                 models=models, status="queued",
-                args={"first_test_season": first_test_season, "feature_groups": groups},
+                args={"first_test_season": first_test_season, "feature_groups": groups,
+                      "auto_select": cfg("training.auto_select") if auto_select is None else auto_select},
             ).returning(TrainingRun.id)
         ).scalar_one()
 
@@ -167,11 +168,45 @@ def _score(metrics: dict[str, Any]) -> dict[str, Any]:
             "ou25_logloss": metrics.get("ou25_logloss"), "btts_logloss": metrics.get("btts_logloss")}
 
 
+def select_feature_groups(all_feats: pd.DataFrame, report: Any) -> tuple[dict[str, bool], dict[str, Any]]:
+    """Quick XGBoost backtest on the latest seasons with and without each extra input group;
+    keep the groups that lower log loss by at least training.auto_select_min_gain."""
+    from backend.models.features import FEATURE_GROUPS, apply_feature_groups
+    from backend.models.ml import logloss_1x2, training_rows, walk_forward
+
+    seasons = sorted(training_rows(all_feats)["season"].unique())
+    first = int(seasons[-cfg("training.auto_select_seasons")]) if len(seasons) > cfg("training.auto_select_seasons") else int(seasons[0])
+
+    def score(groups: dict[str, bool], label: str) -> float:
+        report.stage("selection", "selection", f"Testing which data helps: {label}")
+        data = apply_feature_groups(all_feats, groups)
+        preds, _ = walk_forward(data, "xgb", first, report, per_league=False)
+        p = preds["global"].merge(data[["match_id", "y_1x2"]], on="match_id")
+        return float(logloss_1x2(p, p["y_1x2"]).mean())
+
+    baseline = score({}, "without extra groups")
+    tested = {"baseline": round(baseline, 5), "first_season": first, "groups": {}}
+    chosen = {}
+    for group in FEATURE_GROUPS:
+        with_group = score({group: True}, f"with {group}")
+        gain = baseline - with_group
+        chosen[group] = gain >= cfg("training.auto_select_min_gain")
+        tested["groups"][group] = {"logloss": round(with_group, 5), "gain": round(gain, 5), "kept": chosen[group]}
+    report.finish_model()
+    return chosen, tested
+
+
 async def _train(run_id: int, models: list[str], first_test_season: int, as_of: date,
-                 feature_groups: dict[str, bool]) -> dict[str, Any]:
+                 feature_groups: dict[str, bool], auto_select: bool = False) -> dict[str, Any]:
     from backend.database.engine import AsyncSessionFactory
     from backend.evaluation.metrics import evaluate, load_prices
-    from backend.models.data import load_lineups, load_matches, load_news_mentions, load_team_stats
+    from backend.models.data import (
+        load_injuries,
+        load_lineups,
+        load_matches,
+        load_news_mentions,
+        load_team_stats,
+    )
     from backend.models.features import FEATURE_COLUMNS, apply_feature_groups, build_features
     from backend.models.ml import (
         MODEL_CLASSES,
@@ -194,13 +229,20 @@ async def _train(run_id: int, models: list[str], first_test_season: int, as_of: 
         lineups, goal_events = await load_lineups(session)
         news = await load_news_mentions(session)
         team_stats = await load_team_stats(session)
-    feats = apply_feature_groups(build_features(matches, lineups, goal_events, news, team_stats), feature_groups)
+        injuries = await load_injuries(session)
+    all_feats = build_features(matches, lineups, goal_events, news, team_stats, injuries)
+    if auto_select:
+        feature_groups, results["feature_selection"] = select_feature_groups(all_feats, report)
+        _set(run_id, args={"first_test_season": first_test_season, "feature_groups": feature_groups,
+                           "auto_select": True})
+    feats = apply_feature_groups(all_feats, feature_groups)
     finished = matches[matches["status"] == "finished"][["match_id", "home_goals", "away_goals", "season", "league"]]
     upcoming = upcoming_rows(feats, pd.Timestamp(as_of))
     results["data"] = {"matches": int(len(matches)), "training_rows": int(len(training_rows(feats))),
                        "features": len(FEATURE_COLUMNS), "upcoming": int(len(upcoming)),
                        "matches_with_lineups": int(lineups["match_id"].nunique()) if not lineups.empty else 0,
                        "news_mentions": int(len(news)), "team_stat_rows": int(len(team_stats)),
+                       "injury_rows": int(len(injuries)),
                        "feature_groups": feature_groups}
 
     async def store(name: str, kind: str, preds: pd.DataFrame, params: dict[str, Any]) -> dict[str, Any]:
@@ -269,7 +311,8 @@ def execute(run_id: int) -> None:
     try:
         first = int((run.args or {}).get("first_test_season") or default_first_test_season())
         groups = dict((run.args or {}).get("feature_groups") or {})
-        results = asyncio.run(_run_async(run_id, list(run.models), first, groups))
+        auto = bool((run.args or {}).get("auto_select"))
+        results = asyncio.run(_run_async(run_id, list(run.models), first, groups, auto))
         _set(run_id, status="finished", finished_at=datetime.now(UTC), results=results,
              message="Trained, backtested and predicting upcoming matches")
     except Exception as exc:
@@ -278,11 +321,12 @@ def execute(run_id: int) -> None:
         raise
 
 
-async def _run_async(run_id: int, models: list[str], first: int, groups: dict[str, bool]) -> dict[str, Any]:
+async def _run_async(run_id: int, models: list[str], first: int, groups: dict[str, bool],
+                     auto: bool = False) -> dict[str, Any]:
     from backend.database.engine import dispose_database_engine
 
     try:
-        return await _train(run_id, models, first, date.today(), groups)
+        return await _train(run_id, models, first, date.today(), groups, auto)
     finally:
         await dispose_database_engine()
 
@@ -291,7 +335,8 @@ async def ml_live_predictions(matches: pd.DataFrame, as_of: date,
                               lineups: pd.DataFrame | None = None,
                               goal_events: pd.DataFrame | None = None,
                               news: pd.DataFrame | None = None,
-                              team_stats: pd.DataFrame | None = None) -> dict[str, pd.DataFrame]:
+                              team_stats: pd.DataFrame | None = None,
+                              injuries: pd.DataFrame | None = None) -> dict[str, pd.DataFrame]:
     """Predict upcoming matches with every saved ML model (used by the automation loop)."""
     from backend.models.features import apply_feature_groups, build_features
     from backend.models.ml import (
@@ -307,7 +352,7 @@ async def ml_live_predictions(matches: pd.DataFrame, as_of: date,
     saved = [name for name in MODEL_CLASSES if (MODEL_DIR / name / "meta.json").exists()]
     if not saved:
         return {}
-    feats = await asyncio.to_thread(build_features, matches, lineups, goal_events, news, team_stats)
+    feats = await asyncio.to_thread(build_features, matches, lineups, goal_events, news, team_stats, injuries)
     upcoming = upcoming_rows(feats, pd.Timestamp(as_of))
     out: dict[str, pd.DataFrame] = {}
     autos = []

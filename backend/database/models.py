@@ -335,6 +335,58 @@ class Prediction(Base):
     )
 
 
+class ForwardPrediction(Base):
+    """A model's prediction for a future match, frozen at kickoff and scored after the result.
+
+    This is the honest test: predictions are recorded BEFORE the match and can't be changed after.
+    """
+
+    __tablename__ = "forward_predictions"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    match_id: Mapped[int] = mapped_column(ForeignKey("matches.id", ondelete="CASCADE"), nullable=False)
+    model: Mapped[str] = mapped_column(String(48), nullable=False)
+    kickoff_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    locked: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
+    p_home: Mapped[float] = mapped_column(Float, nullable=False)
+    p_draw: Mapped[float] = mapped_column(Float, nullable=False)
+    p_away: Mapped[float] = mapped_column(Float, nullable=False)
+    p_over25: Mapped[float | None] = mapped_column(Float)
+    p_btts: Mapped[float | None] = mapped_column(Float)
+    raw: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default="{}")  # before calibration
+    # filled in after the match
+    outcome: Mapped[str | None] = mapped_column(String(8))  # home draw away
+    settled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    logloss_1x2: Mapped[float | None] = mapped_column(Float)
+    correct_1x2: Mapped[bool | None] = mapped_column(Boolean)
+
+    __table_args__ = (
+        UniqueConstraint("match_id", "model", name="uq_forward_predictions_match_model"),
+        Index("ix_forward_predictions_model_settled", "model", "settled_at"),
+    )
+
+
+class MockBet(Base):
+    """A pretend bet placed from a forward prediction (no money). Settled on the real result."""
+
+    __tablename__ = "mock_bets"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    prediction_id: Mapped[int] = mapped_column(ForeignKey("forward_predictions.id", ondelete="CASCADE"), nullable=False)
+    rule: Mapped[str] = mapped_column(String(24), nullable=False)  # favourite | value
+    market: Mapped[str] = mapped_column(String(8), nullable=False)
+    selection: Mapped[str] = mapped_column(String(8), nullable=False)
+    p_model: Mapped[float] = mapped_column(Float, nullable=False)
+    price: Mapped[float | None] = mapped_column(Float)  # pre-match price, used only as the payout
+    stake: Mapped[float] = mapped_column(Float, nullable=False)
+    status: Mapped[str] = mapped_column(String(8), nullable=False)  # open won lost
+    profit: Mapped[float | None] = mapped_column(Float)
+
+    __table_args__ = (UniqueConstraint("prediction_id", "rule", "market", "selection", name="uq_mock_bets_pick"),)
+
+
 class NewsArticle(Base):
     """A football news article (headline + summary), collected by the news spider."""
 

@@ -29,7 +29,8 @@ MODEL_INFO = {
 class StartTraining(BaseModel):
     models: list[str] = Field(default_factory=lambda: list(MODEL_INFO))
     first_test_season: int | None = None  # default: derived from the data
-    feature_groups: dict[str, bool] | None = None  # default: training.default_feature_groups in settings
+    feature_groups: dict[str, bool] | None = None  # default: training.feature_groups.*.default in settings
+    auto_select: bool | None = None  # default: training.auto_select (test each group, keep what helps)
 
 
 def _json(run: TrainingRun, full: bool = True) -> dict[str, Any]:
@@ -77,6 +78,7 @@ async def info() -> dict[str, Any]:
     return {"gpu": gpu, "libraries": {"xgboost": has_xgb, "torch": has_torch},
             "default_first_test_season": first,
             "default_feature_groups": training.default_feature_groups(),
+            "auto_select": cfg("training.auto_select"),
             "feature_groups": [{"name": n, "label": g["label"], "about": g["about"]}
                                for n, g in cfg("training.feature_groups").items()],
             "models": [{"name": n, **i, "saved": saved[n]} for n, i in MODEL_INFO.items()]}
@@ -121,7 +123,7 @@ async def start(body: StartTraining) -> dict[str, Any]:
     if busy:
         raise HTTPException(409, "A training run is already going. Stop it or wait for it to finish.")
     run_id = await asyncio.to_thread(training.create_run, body.models, body.first_test_season,
-                                     body.feature_groups)
+                                     body.feature_groups, body.auto_select)
     await asyncio.to_thread(training.launch, run_id)
     return {"id": run_id}
 

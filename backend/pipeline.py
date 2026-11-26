@@ -32,6 +32,9 @@ def _clean(value: Any) -> Any:
 async def _store(session: AsyncSession, model: str, kind: str, preds: pd.DataFrame,
                  params: dict[str, Any], metrics: dict[str, Any], trained_until: date | None) -> int:
     """Replace the previous run of this model+kind with this one."""
+    if kind == "live":  # apply what the forward test has learned about this model (no-op until enough matches)
+        from backend.forward import calibrate_predictions
+        preds = await calibrate_predictions(session, model, preds)
     old_runs = (await session.execute(
         select(ModelRun.id).where(ModelRun.model == model, ModelRun.kind == kind)
     )).scalars().all()
@@ -85,13 +88,14 @@ async def predict_and_store(session: AsyncSession, as_of: date) -> dict[str, int
         await _store(session, model, "live", preds, {}, {}, trained_until=as_of)
         counts[model] = len(preds)
     # Trained ML models (saved by backend.training), if any have been trained yet.
-    from backend.models.data import load_lineups, load_news_mentions, load_team_stats
+    from backend.models.data import load_injuries, load_lineups, load_news_mentions, load_team_stats
     from backend.training import ml_live_predictions
     try:
         lineups, goal_events = await load_lineups(session)
         news = await load_news_mentions(session)
         team_stats = await load_team_stats(session)
-        ml = await ml_live_predictions(matches, as_of, lineups, goal_events, news, team_stats)
+        injuries = await load_injuries(session)
+        ml = await ml_live_predictions(matches, as_of, lineups, goal_events, news, team_stats, injuries)
     except ImportError:  # xgboost / torch not installed
         ml = {}
     for model, preds in ml.items():

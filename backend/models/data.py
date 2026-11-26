@@ -152,3 +152,41 @@ async def load_team_stats(session: AsyncSession) -> pd.DataFrame:
             record[name] = float(value) if isinstance(value, int | float) else None
         records.append(record)
     return pd.DataFrame.from_records(records, columns=["match_id", "team_id", *wanted])
+
+
+async def load_injuries(session: AsyncSession) -> pd.DataFrame:
+    """Players listed out / doubtful per (match, team), from API-Football injury lists (published before
+    each fixture). Types are grouped by settings (features.injury_types)."""
+    from backend.core.settings import cfg
+    from backend.database.models import ProviderEntityMapping, RawProviderObservation
+
+    maps: dict[str, dict[str, int]] = {}
+    for entity in ("match", "team"):
+        rows = (await session.execute(
+            select(ProviderEntityMapping.provider_entity_id, ProviderEntityMapping.canonical_id).where(
+                ProviderEntityMapping.provider_name == "api_football", ProviderEntityMapping.entity_type == entity,
+                ProviderEntityMapping.canonical_id.is_not(None)))).all()
+        maps[entity] = {str(k): int(v) for k, v in rows}
+    kinds = {t: kind for kind, types in cfg("features.injury_types").items() for t in types}
+    counts: dict[tuple[int, int], dict[str, int]] = {}
+    payloads = (await session.execute(select(RawProviderObservation.payload).where(
+        RawProviderObservation.provider_name == "api_football", RawProviderObservation.endpoint == "injuries",
+        RawProviderObservation.status.in_(("stored", "success"))))).scalars().all()
+    seen: set[tuple[str, str]] = set()
+    for payload in payloads:
+        for item in (payload or {}).get("response") or []:
+            fixture = str((item.get("fixture") or {}).get("id") or "")
+            team = str((item.get("team") or {}).get("id") or "")
+            player = item.get("player") or {}
+            kind = kinds.get(player.get("type"))
+            if not kind or (fixture, str(player.get("id"))) in seen:
+                continue
+            seen.add((fixture, str(player.get("id"))))
+            match_id, team_id = maps["match"].get(fixture), maps["team"].get(team)
+            if match_id is None or team_id is None:
+                continue
+            entry = counts.setdefault((match_id, team_id), {})
+            entry[kind] = entry.get(kind, 0) + 1
+    kinds_list = list(cfg("features.injury_types"))
+    records = [{"match_id": m, "team_id": t, **{k: float(v.get(k, 0)) for k in kinds_list}} for (m, t), v in counts.items()]
+    return pd.DataFrame.from_records(records, columns=["match_id", "team_id", *kinds_list])
