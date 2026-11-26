@@ -4,17 +4,16 @@ import { useState } from 'react'
 import { Guide, VerdictBadge } from '../components/Guide'
 import { Card, CardHeader, EmptyState, PageHeader } from '../components/ui'
 import { api } from '../lib/api'
+import { leagues, refresh, setting } from '../lib/settings'
 
-const LEAGUES = [
-  ['', 'All leagues'], ['ENG1', 'Premier League'], ['ENG2', 'Championship'], ['ESP1', 'La Liga'], ['ESP2', 'Segunda'],
-  ['ITA1', 'Serie A'], ['ITA2', 'Serie B'], ['GER1', 'Bundesliga'], ['GER2', '2. Bundesliga'], ['FRA1', 'Ligue 1'], ['FRA2', 'Ligue 2'],
-] as const
 const control = 'rounded-lg border border-zinc-200 bg-white px-3 py-1.5 text-sm outline-none focus:border-zinc-400 dark:border-zinc-800 dark:bg-zinc-900'
 
 function Mood({ value }: { value: number | null }) {
   if (value === null) return <span className="text-zinc-400">—</span>
-  const verdict = value > 0.15 ? 'good' : value < -0.15 ? 'bad' : 'medium'
-  const label = value > 0.15 ? 'Positive' : value < -0.15 ? 'Negative' : 'Mixed'
+  const up = setting<number>('news.mood_positive_above')
+  const down = setting<number>('news.mood_negative_below')
+  const verdict = value > up ? 'good' : value < down ? 'bad' : 'medium'
+  const label = value > up ? 'Positive' : value < down ? 'Negative' : 'Mixed'
   return <span className="inline-flex items-center gap-2"><span className="tabular text-xs text-zinc-500">{value > 0 ? '+' : ''}{value.toFixed(2)}</span><VerdictBadge verdict={verdict} label={label} /></span>
 }
 
@@ -27,21 +26,21 @@ export default function TeamNews() {
   const [league, setLeague] = useState('')
   const [team, setTeam] = useState<{ id: number; name: string } | null>(null)
   const [injuryOnly, setInjuryOnly] = useState(false)
-  const mood = useQuery({ queryKey: ['news', 'teams', league], queryFn: () => api.newsTeams(league), refetchInterval: 60000 })
+  const mood = useQuery({ queryKey: ['news', 'teams', league], queryFn: () => api.newsTeams(league), refetchInterval: refresh('minute') })
   const articles = useQuery({
     queryKey: ['news', 'articles', league, team?.id, injuryOnly],
     queryFn: () => api.newsArticles({ league, team_id: team?.id, injury: injuryOnly || undefined }),
-    refetchInterval: 60000,
+    refetchInterval: refresh('minute'),
   })
   const total = mood.data?.total_articles ?? 0
   const since = mood.data?.collecting_since
 
   return (
     <>
-      <PageHeader title="Team news" description="Football news for the 10 leagues, read automatically every hour: good or bad news for each team, and injuries." />
+      <PageHeader title="Team news" description="Football news for the tracked leagues, read automatically: good or bad news for each team, and injuries." />
       <Guide items={[
         {
-          title: 'News mood (last 7 days)',
+          title: `News mood (last ${setting<number>('news.feature_days')} days)`,
           body: 'Every headline and summary is scored from −1 (bad news: defeats, crisis, injuries, sackings) to +1 (good news: wins, players returning, winning runs). A team\'s mood is the average over its articles this week; stories about two clubs count half for each.',
           verdict: 'info',
         },
@@ -53,21 +52,22 @@ export default function TeamNews() {
         {
           title: 'Does this feed the predictions?',
           body: `Yes, as "news features" you can switch on per training run (Training page). The models can only learn from news once there is history to compare against results: ${total.toLocaleString('en-IN')} articles so far${since ? `, the oldest from ${new Date(since).toLocaleDateString('en-IN', { dateStyle: 'medium' })}` : ''}. Give it a few weeks of hourly collection, then compare a run with and without news.`,
-          verdict: total > 5000 ? 'good' : 'medium',
-          verdictLabel: total > 5000 ? 'Enough history' : 'Building history',
+          verdict: total > setting<number>('verdicts.news_enough') ? 'good' : 'medium',
+          verdictLabel: total > setting<number>('verdicts.news_enough') ? 'Enough history' : 'Building history',
         },
         {
           title: 'How the scoring works',
-          body: 'A transparent football word list (no black box): "thrash", "unbeaten", "returns" count as good; "slump", "sacked", "ruled out" as bad; the headline counts double. Betting talk is ignored. Hover a headline to see the words it found.',
+          body: `A transparent football word list (no black box, editable in Settings → news.words): "thrash", "unbeaten", "returns" count as good; "slump", "sacked", "ruled out" as bad; the headline counts ${setting<number>('news.headline_weight')}×. Betting talk is ignored. Hover a headline to see the words it found.`,
           verdict: 'info',
         },
       ]} />
 
       <div className="grid gap-6 lg:grid-cols-5">
         <Card className="lg:col-span-2">
-          <CardHeader title="Team mood · last 7 days" aside={
+          <CardHeader title={`Team mood · last ${setting<number>('news.feature_days')} days`} aside={
             <select value={league} onChange={(e) => { setLeague(e.target.value); setTeam(null) }} className={`${control} py-1 text-xs`} aria-label="League">
-              {LEAGUES.map(([code, name]) => <option key={code} value={code}>{name}</option>)}
+              <option value="">All leagues</option>
+              {leagues().map((l) => <option key={l.code} value={l.code}>{l.name}</option>)}
             </select>
           } />
           {mood.data && mood.data.teams.length === 0 ? (

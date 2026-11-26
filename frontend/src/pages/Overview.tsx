@@ -4,6 +4,7 @@ import InPlay from '../components/InPlay'
 import StrategyControls from '../components/StrategyControls'
 import { Badge, Card, CardHeader, PageHeader, Stat, StatusDot } from '../components/ui'
 import { api } from '../lib/api'
+import { refresh, setting } from '../lib/settings'
 
 const ROADMAP = [
   { phase: 0, title: 'Foundations', detail: 'Project setup, Docker Postgres, tests, API and dashboard', done: true },
@@ -37,11 +38,11 @@ type Tone = 'ok' | 'warn' | 'off' | 'bad'
 export default function Overview() {
   const providers = useQuery({ queryKey: ['providers'], queryFn: api.providers })
   const summary = useQuery({ queryKey: ['summary'], queryFn: api.summary })
-  const strategies = useQuery({ queryKey: ['strategies'], queryFn: api.strategies, refetchInterval: 10000 })
-  const stake = useQuery({ queryKey: ['stake', 'status'], queryFn: api.stakeStatus, refetchInterval: 5000 })
-  const exposure = useQuery({ queryKey: ['exposure'], queryFn: api.exposure, refetchInterval: 15000 })
-  const automation = useQuery({ queryKey: ['automation'], queryFn: api.automation, refetchInterval: 30000 })
-  const scrapes = useQuery({ queryKey: ['scraper', 'runs'], queryFn: api.scraperRuns, refetchInterval: 30000 })
+  const strategies = useQuery({ queryKey: ['strategies'], queryFn: api.strategies, refetchInterval: refresh('medium') })
+  const stake = useQuery({ queryKey: ['stake', 'status'], queryFn: api.stakeStatus, refetchInterval: refresh('fast') })
+  const exposure = useQuery({ queryKey: ['exposure'], queryFn: api.exposure, refetchInterval: refresh('normal') })
+  const automation = useQuery({ queryKey: ['automation'], queryFn: api.automation, refetchInterval: refresh('slow') })
+  const scrapes = useQuery({ queryKey: ['scraper', 'runs'], queryFn: api.scraperRuns, refetchInterval: refresh('slow') })
 
   const all = strategies.data ?? []
   const live = all.filter((x) => x.enabled)
@@ -97,7 +98,7 @@ export default function Overview() {
         },
         {
           title: 'Automation',
-          body: 'Runs inside the API server every 15 minutes: settles finished bets, lets switched-on strategies pick bets, keeps the scraper going, and re-predicts upcoming matches every 6 hours.',
+          body: `Runs inside the API server every ${setting<number>('automation.cycle_minutes')} minutes: settles finished bets, lets switched-on strategies pick bets, keeps the scraper going, and re-predicts upcoming matches every ${setting<number>('automation.refresh_hours')} hours.`,
           verdict: auto?.last_error ? 'bad' : auto?.last_cycle ? 'good' : 'medium',
           verdictLabel: auto?.last_error ? 'Error' : auto?.last_cycle ? 'Running' : 'Not run yet',
         },
@@ -109,14 +110,14 @@ export default function Overview() {
         },
         {
           title: 'Top cards',
-          body: 'Balance and "on Stake now" come from your Stake account through the helper. "Sent today" counts real bets the system sent against the daily cap in .env (₹1 bets, ₹20 test budget). Strategies: how many are switched on, and how many use real money.',
+          body: 'Balance and "on Stake now" come from your Stake account through the helper. "Sent today" counts real bets the system sent against the daily cap and budget in .env. Strategies: how many are switched on, and how many use real money.',
           verdict: 'info',
         },
         {
           title: 'Data',
-          body: 'Matches and teams in the database (2015 to now, 10 leagues). Odds quotes are prices only, used to size bets, never as model inputs. Raw observations are untouched API responses stored by the collector.',
-          verdict: (summary.data?.matches ?? 0) > 40000 ? 'good' : 'medium',
-          verdictLabel: (summary.data?.matches ?? 0) > 40000 ? 'Plenty of match data' : undefined,
+          body: 'Matches and teams in the database. Odds quotes are prices only, used to size bets, never as model inputs. Raw observations are untouched API responses stored by the collector.',
+          verdict: (summary.data?.matches ?? 0) > setting<number>('verdicts.matches_plenty') ? 'good' : 'medium',
+          verdictLabel: (summary.data?.matches ?? 0) > setting<number>('verdicts.matches_plenty') ? 'Plenty of match data' : undefined,
         },
       ]} />
 

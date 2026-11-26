@@ -12,8 +12,7 @@ from typing import Any
 import scrapy
 
 from backend.core.leagues import LEAGUES, LEAGUES_BY_CODE
-
-NEWS_URL = "https://site.api.espn.com/apis/site/v2/sports/soccer/{slug}/news?limit=100"
+from backend.core.settings import cfg
 
 
 def parse_articles(payload: dict[str, Any], league_code: str) -> list[dict[str, Any]]:
@@ -45,7 +44,7 @@ def parse_articles(payload: dict[str, Any], league_code: str) -> list[dict[str, 
 
 class EspnNewsSpider(scrapy.Spider):
     name = "espn_news"
-    custom_settings = {"DOWNLOAD_DELAY": 2.0, "HTTPCACHE_ENABLED": False}  # news changes all the time
+    custom_settings = {"DOWNLOAD_DELAY": cfg("scraper.download_delay_seconds"), "HTTPCACHE_ENABLED": False}  # news changes all the time
 
     def __init__(self, leagues: str = "", **kwargs: Any) -> None:
         super().__init__(**kwargs)
@@ -54,7 +53,8 @@ class EspnNewsSpider(scrapy.Spider):
 
     async def start(self):  # Scrapy 2.13+ entry point
         for league in self.leagues:
-            yield scrapy.Request(NEWS_URL.format(slug=league.espn_slug), callback=self.parse,
+            url = f"{cfg('scraper.espn.feed_url')}/{league.espn_slug}/news?limit={cfg('news.articles_per_league')}"
+            yield scrapy.Request(url, callback=self.parse,
                                  cb_kwargs={"league_code": league.code})
 
     def parse(self, response, league_code: str):

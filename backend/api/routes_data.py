@@ -10,6 +10,7 @@ from sqlalchemy import and_, func, select
 from sqlalchemy.orm import aliased
 
 from backend.core.leagues import LEAGUES
+from backend.core.settings import cfg
 from backend.database.engine import AsyncSessionFactory
 from backend.database.models import (
     Competition,
@@ -25,7 +26,6 @@ from backend.identity.mappings import MappingStatus, ResolutionMethod
 
 router = APIRouter(prefix="/api")
 
-DEFAULT_MODEL = "blend"  # most accurate in the walk-forward backtest
 PREDICTION_FIELDS = ("p_home", "p_draw", "p_away", "p_over25", "p_btts", "exp_home_goals", "exp_away_goals")
 
 
@@ -56,7 +56,7 @@ async def models() -> list[dict[str, Any]]:
         )).all())
     return [
         {"model": r.model, "created_at": r.created_at, "params": r.params, "metrics": r.metrics,
-         "live_trained_until": live.get(r.model), "default": r.model == DEFAULT_MODEL}
+         "live_trained_until": live.get(r.model), "default": r.model == cfg("strategies.default_model")}
         for r in runs
     ]
 
@@ -110,7 +110,7 @@ async def matches(
     season: int = Query(..., description="season start year"),
     limit: int = Query(50, le=500),
     offset: int = 0,
-    model: str = Query(DEFAULT_MODEL, description="elo, dixon_coles or blend"),
+    model: str | None = Query(None, description="model name; default from settings (strategies.default_model)"),
 ) -> dict[str, Any]:
     """Matches for one league-season, newest first, with closing 1X2 odds and the model's prediction.
 
@@ -147,7 +147,7 @@ async def matches(
                 key = f"{bookmaker}:{market}:{'close' if is_closing else 'open'}"
                 odds.setdefault(match_id, {}).setdefault(key, {})[selection] = float(price)
 
-        predictions = await _predictions_for(session, ids, model)
+        predictions = await _predictions_for(session, ids, model or cfg("strategies.default_model"))
 
     def best_1x2(match_id: int) -> dict[str, Any] | None:
         book = odds.get(match_id, {})

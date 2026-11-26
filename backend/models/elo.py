@@ -13,19 +13,22 @@ import numpy as np
 import pandas as pd
 from sklearn.linear_model import LogisticRegression
 
+from backend.core.settings import cfg
 from backend.models.data import assert_odds_free
 
 
 @dataclass
 class EloParams:
-    k: float = 20.0
-    home_advantage: float = 65.0
-    start_rating_by_tier: dict[int, float] = field(default_factory=lambda: {1: 1500.0, 2: 1350.0})
-    season_regression: float = 0.2  # pull ratings 20% back to their league mean between seasons
+    k: float = field(default_factory=lambda: cfg("elo.k"))
+    home_advantage: float = field(default_factory=lambda: cfg("elo.home_advantage"))
+    start_rating_by_tier: dict[int, float] = field(
+        default_factory=lambda: {int(t): float(v) for t, v in cfg("elo.start_rating_by_tier").items()})
+    season_regression: float = field(default_factory=lambda: cfg("elo.season_regression"))
+    goal_multiplier: float = field(default_factory=lambda: cfg("elo.goal_multiplier"))
 
 
-def _goal_multiplier(goal_diff: int) -> float:
-    return 1.0 if goal_diff <= 1 else float(np.log(goal_diff + 1) * 1.45)
+def _goal_multiplier(goal_diff: int, scale: float) -> float:
+    return 1.0 if goal_diff <= 1 else float(np.log(goal_diff + 1) * scale)
 
 
 def pre_match_ratings(matches: pd.DataFrame, params: EloParams | None = None) -> pd.DataFrame:
@@ -44,10 +47,10 @@ def pre_match_ratings(matches: pd.DataFrame, params: EloParams | None = None) ->
     for i, row in enumerate(ordered.itertuples(index=False)):
         for team in (row.home_id, row.away_id):
             if team not in ratings:
-                ratings[team] = p.start_rating_by_tier.get(row.tier, 1350.0)
+                ratings[team] = p.start_rating_by_tier.get(row.tier, min(p.start_rating_by_tier.values()))
             elif season_of.get(team) != row.season:
                 # new season: regress towards the starting level of the team's current tier
-                base = p.start_rating_by_tier.get(row.tier, 1350.0)
+                base = p.start_rating_by_tier.get(row.tier, min(p.start_rating_by_tier.values()))
                 ratings[team] = ratings[team] + p.season_regression * (base - ratings[team])
             season_of[team] = row.season
 
@@ -58,7 +61,7 @@ def pre_match_ratings(matches: pd.DataFrame, params: EloParams | None = None) ->
             expected_home = 1.0 / (1.0 + 10 ** ((ra - rh - p.home_advantage) / 400.0))
             hg, ag = int(row.home_goals), int(row.away_goals)
             actual = 1.0 if hg > ag else 0.5 if hg == ag else 0.0
-            change = p.k * _goal_multiplier(abs(hg - ag)) * (actual - expected_home)
+            change = p.k * _goal_multiplier(abs(hg - ag), p.goal_multiplier) * (actual - expected_home)
             ratings[row.home_id] = rh + change
             ratings[row.away_id] = ra - change
 
@@ -76,8 +79,8 @@ class EloOutcomeModel:
     matches before the prediction cutoff.
     """
 
-    def __init__(self, home_advantage: float = EloParams().home_advantage) -> None:
-        self.home_advantage = home_advantage
+    def __init__(self, home_advantage: float | None = None) -> None:
+        self.home_advantage = cfg("elo.home_advantage") if home_advantage is None else home_advantage
         self._model = LogisticRegression(max_iter=1000)
 
     def _x(self, elo_home, elo_away) -> np.ndarray:

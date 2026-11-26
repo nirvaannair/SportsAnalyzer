@@ -70,6 +70,14 @@ then in this folder: `copy .env.example .env` (fill in keys), `python -m venv .v
 - The owner is new to Claude Code; explain plainly. **Keep this README current** so a fresh chat can continue.
 
 ### Hard rules
+0. **No hard-coded values (owner's rule, 2026-11-26).** Every tunable number, date, threshold, budget, interval,
+   season list, league/provider ID, URL and word list lives in **`config/settings.toml`** (commented), read through
+   `backend/core/settings.py` (`cfg("section.key")`) and, in the dashboard, `frontend/src/lib/settings.ts`
+   (`setting('section.key')`). Values that can be worked out from the data are derived (e.g. the default backtest start
+   season, season choices on the Training page, the comparison model). The **Settings** page edits any value; edits go to
+   `config/settings.local.json` (git-ignored) and override the defaults. `tests/test_settings.py` fails if a setting used
+   in code is missing, or if a numeric constant or fixed date appears in backend code. Stays out of settings on purpose:
+   secrets and money caps (`.env`), names (columns, features, statuses, the three markets) and maths constants.
 1. **Models never use odds as inputs** or blend toward the market (§5.0). Enforced by `tests/test_odds_firewall.py`. Prices live in `odds_quotes` / `stake_outcomes` and are read only by `backend/evaluation`, `backend/strategies` and `backend/execution`.
 2. **Secrets never go to GitHub** (the repo is public). Keys live in `.env` (git-ignored); only `.env.example` is committed.
 3. **The assistant never places real-money bets itself** and never bypasses Cloudflare or other bot protection (no cf_clearance cookies, no browser impersonation). Real bets go out only from the owner's own Stake tab via the Chrome extension, only when the owner has switched Execution on, and only within the caps in `.env`.

@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 
 from backend import training
+from backend.core.settings import cfg
 from backend.database.engine import AsyncSessionFactory
 from backend.database.models import TrainingRun
 from backend.scraping.run import pid_alive
@@ -26,9 +27,9 @@ MODEL_INFO = {
 
 
 class StartTraining(BaseModel):
-    models: list[str] = Field(default_factory=lambda: ["xgb", "nn"])
-    first_test_season: int = training.DEFAULT_FIRST_TEST_SEASON
-    feature_groups: dict[str, bool] = Field(default_factory=lambda: {"players": False, "news": False})
+    models: list[str] = Field(default_factory=lambda: list(MODEL_INFO))
+    first_test_season: int | None = None  # default: derived from the data
+    feature_groups: dict[str, bool] | None = None  # default: training.default_feature_groups in settings
 
 
 def _json(run: TrainingRun, full: bool = True) -> dict[str, Any]:
@@ -69,7 +70,13 @@ async def info() -> dict[str, Any]:
         has_torch = False
     gpu = await asyncio.to_thread(gpu_name)
     saved = {name: (training.MODEL_DIR / name / "meta.json").exists() for name in MODEL_INFO}
+    try:
+        first = await asyncio.to_thread(training.default_first_test_season)
+    except ValueError:
+        first = None
     return {"gpu": gpu, "libraries": {"xgboost": has_xgb, "torch": has_torch},
+            "default_first_test_season": first,
+            "default_feature_groups": cfg("training.default_feature_groups"),
             "models": [{"name": n, **i, "saved": saved[n]} for n, i in MODEL_INFO.items()]}
 
 

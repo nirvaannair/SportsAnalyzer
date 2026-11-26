@@ -11,6 +11,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
+from backend.core.settings import cfg
 from backend.database.models import (
     Competition,
     Match,
@@ -21,9 +22,6 @@ from backend.database.models import (
 )
 from backend.execution.stake_parse import parse_payload
 from backend.identity.team_resolver import name_similarity
-
-MIN_TEAM_SIMILARITY = 0.45
-MIN_MARGIN = 0.15  # candidates are already limited to the same competition and date ±1
 
 
 async def store_parsed(session: AsyncSession, fixtures: list[dict[str, Any]], outcomes: list[dict[str, Any]]) -> None:
@@ -69,7 +67,7 @@ async def link_stake_fixtures(session: AsyncSession) -> dict[str, int]:
             continue
         best = scored[0]
         runner_up = scored[1][0] if len(scored) > 1 else 0.0
-        if best[0] >= MIN_TEAM_SIMILARITY and best[0] - runner_up >= MIN_MARGIN:
+        if best[0] >= cfg("stake.min_team_similarity") and best[0] - runner_up >= cfg("stake.min_margin"):
             fixture.match_id = best[1]
             fixture.link_detail = f"Linked to {best[2]} v {best[3]} (name match {best[0]:.2f})"
             linked += 1

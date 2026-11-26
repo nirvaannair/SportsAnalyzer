@@ -20,14 +20,11 @@ from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.core.settings import cfg
 from backend.database.models import AppSetting, ScrapeRun
 from backend.scraping import run as runner
 
 SETTING_KEY = "scraper_auto"
-BACKFILL_FROM = date(2019, 7, 1)
-RECENT_EVERY = timedelta(hours=6)
-NEWS_EVERY = timedelta(hours=1)
-LOAD_EVERY = timedelta(minutes=15)  # load lineups while a long crawl is still running
 _last_load: dict[str, datetime] = {}
 ACTIVE = ("queued", "running", "loading")
 
@@ -48,9 +45,15 @@ async def set_auto(session: AsyncSession, **values: Any) -> dict[str, Any]:
 
 
 def backfill_chunks(today: date) -> list[tuple[date, date]]:
-    """Newest first: last 2 years, then back to mid-2021, then back to mid-2019."""
-    two_years = today - timedelta(days=730)
-    return [(two_years, today), (date(2021, 7, 1), two_years), (BACKFILL_FROM, date(2021, 7, 1))]
+    """Newest first: the last `newest_first_years`, then `chunk_years` at a time back to `history_start`."""
+    start = date.fromisoformat(cfg("scraper.history_start"))
+    edge = max(start, today - timedelta(days=round(365.25 * cfg("scraper.newest_first_years"))))
+    chunks = [(edge, today)]
+    while edge > start:
+        older = max(start, edge - timedelta(days=round(365.25 * cfg("scraper.chunk_years"))))
+        chunks.append((older, edge))
+        edge = older
+    return chunks
 
 
 def _covers(run: ScrapeRun, start: date, end: date) -> bool:
@@ -98,13 +101,13 @@ async def cycle(session: AsyncSession, today: date | None = None) -> dict[str, A
     report: dict[str, Any] = {}
     # News is quick (10 requests) and runs alongside the match scraper, once an hour.
     news = [r for r in runs if r.spider == "espn_news"]
-    if not any(r.status in ACTIVE for r in news) and             (not news or datetime.now(UTC) - news[0].created_at >= NEWS_EVERY):
+    if not any(r.status in ACTIVE for r in news) and             (not news or datetime.now(UTC) - news[0].created_at >= timedelta(minutes=cfg("news.every_minutes"))):
         report["news"] = f"news run #{await _launch('espn_news', {'leagues': ''})}"
 
     active = [r for r in runs if r.status in ACTIVE and r.spider == "espn_matches"]
     if active:
         last = _last_load.get("espn")
-        if active[0].status == "running" and (last is None or datetime.now(UTC) - last >= LOAD_EVERY):
+        if active[0].status == "running" and (last is None or datetime.now(UTC) - last >= timedelta(minutes=cfg("scraper.load_every_minutes"))):
             from backend.scraping.loaders import load_espn
 
             _last_load["espn"] = datetime.now(UTC)
@@ -121,9 +124,10 @@ async def cycle(session: AsyncSession, today: date | None = None) -> dict[str, A
     else:
         last_recent = max((r.created_at for r in runs if r.spider == "espn_matches" and not _is_backfill(r)),
                           default=None)
-        if last_recent and datetime.now(UTC) - last_recent < RECENT_EVERY:
+        if last_recent and datetime.now(UTC) - last_recent < timedelta(hours=cfg("scraper.recent_every_hours")):
             return {**report, "scraper": "up to date"}
-        run_id = await _start(today - timedelta(days=10), today + timedelta(days=14))
-        action = f"started run #{run_id} (last 10 days + next 14)"
+        run_id = await _start(today - timedelta(days=cfg("scraper.recent_days_back")),
+                              today + timedelta(days=cfg("scraper.recent_days_ahead")))
+        action = f"started run #{run_id} (recent and upcoming matches)"
     await set_auto(session, last_action={"at": datetime.now(UTC).isoformat(), "action": action})
     return {**report, "scraper": action}

@@ -20,6 +20,7 @@ import scrapy
 from sqlalchemy import select
 
 from backend.core.leagues import LEAGUES, LEAGUES_BY_CODE, League
+from backend.core.settings import cfg
 from backend.database.models import ScrapedItem
 from backend.scraping import espn_parse
 from backend.scraping.db import engine
@@ -42,7 +43,7 @@ def recency_priority(day: str) -> int:
 
 class EspnMatchesSpider(scrapy.Spider):
     name = "espn_matches"
-    custom_settings = {"DOWNLOAD_DELAY": 2.0}
+    custom_settings = {"DOWNLOAD_DELAY": cfg("scraper.download_delay_seconds")}
 
     def __init__(self, leagues: str = "", date_from: str = "", date_to: str = "",
                  refetch: str = "", **kwargs: Any) -> None:

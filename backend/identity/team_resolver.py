@@ -24,6 +24,7 @@ from typing import Any
 from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.core.settings import cfg
 from backend.database.models import Competition, Match, ProviderEntityMapping, Team
 from backend.identity.mappings import MappingStatus, ResolutionMethod
 from backend.identity.normalization import EntityNameNormalizer
@@ -33,9 +34,6 @@ _normalizer = EntityNameNormalizer(
     remove_tokens=["fc", "cf", "afc", "sc", "ac", "ssc", "as", "us", "club", "calcio", "de", "the", "1"],
 )
 
-MIN_FIXTURES = 5          # need at least this many finished fixtures to trust fixture evidence
-AUTO_ACCEPT = 0.80        # share of fixtures that must line up with one canonical team
-MAX_RUNNER_UP = 0.40      # ...while the next-best candidate lines up with at most this share
 
 
 def normalize(name: str) -> str:
@@ -135,9 +133,9 @@ async def resolve_mapping(session: AsyncSession, mapping: ProviderEntityMapping,
     runner_up = candidates[1] if len(candidates) > 1 else None
     decision: tuple[str, float] | None = None
 
-    if best and usable >= MIN_FIXTURES and best.fixture_score is not None:
+    if best and usable >= cfg("identity.min_fixtures") and best.fixture_score is not None:
         second = (runner_up.fixture_score or 0) if runner_up else 0
-        if best.fixture_score >= AUTO_ACCEPT and second <= MAX_RUNNER_UP:
+        if best.fixture_score >= cfg("identity.auto_accept") and second <= cfg("identity.max_runner_up"):
             decision = (ResolutionMethod.COMPOSITE_SCORE.value, best.fixture_score)
     elif best and best.name_score == 1.0 and (not runner_up or runner_up.name_score < 0.9):
         decision = (ResolutionMethod.NAME_AND_CONTEXT.value, 0.97)

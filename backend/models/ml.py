@@ -30,15 +30,12 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from backend.core.settings import cfg
 from backend.models.features import FEATURE_COLUMNS, LEAGUE_CODES, assert_features_odds_free
 
 Progress = Callable[[dict[str, Any]], None]
 ML_MODELS = ("xgb", "nn")
 VARIANTS = ("global", "league", "auto")
-WARMUP_DAYS = 365  # ratings and form need a season of history before a match is used for training
-VALIDATION_SHARE = 0.15
-MIN_TRAIN_ROWS = 500  # a season fold needs at least this many earlier matches
-MIN_LEAGUE_ROWS = 1000  # fewer training matches than this: the league just uses the global model
 OUTPUT_COLUMNS = ("p_home", "p_draw", "p_away", "p_over25", "p_btts", "exp_home_goals", "exp_away_goals")
 
 
@@ -53,14 +50,14 @@ def stored_name(family: str, variant: str) -> str:
 
 def training_rows(feats: pd.DataFrame) -> pd.DataFrame:
     """Finished matches with enough history behind them to have meaningful features."""
-    first = feats["date"].min() + pd.Timedelta(days=WARMUP_DAYS)
+    first = feats["date"].min() + pd.Timedelta(days=cfg("training.warmup_days"))
     return feats[(feats["status"] == "finished") & feats["y_1x2"].notna() & (feats["date"] >= first)]
 
 
 def time_split(train: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """(fit, validation): validation is the latest VALIDATION_SHARE of the training matches."""
+    """(fit, validation): validation is the latest share (settings: training.validation_share) of the training matches."""
     train = train.sort_values(["date", "match_id"])
-    cut = int(len(train) * (1 - VALIDATION_SHARE))
+    cut = int(len(train) * (1 - cfg("training.validation_share")))
     return train.iloc[:cut], train.iloc[cut:]
 
 
@@ -87,7 +84,7 @@ def _x(frame: pd.DataFrame) -> np.ndarray:
 
 def _tuned_leagues(train: pd.DataFrame) -> list[str]:
     counts = train["league"].value_counts()
-    return sorted(str(lg) for lg, n in counts.items() if n >= MIN_LEAGUE_ROWS)
+    return sorted(str(lg) for lg, n in counts.items() if n >= cfg("training.min_league_rows"))
 
 
 def _empty_predictions() -> pd.DataFrame:
@@ -106,10 +103,6 @@ _XGB_TASKS = {
     "home_goals": ("count:poisson", "poisson-nloglik", "home_goals"),
     "away_goals": ("count:poisson", "poisson-nloglik", "away_goals"),
 }
-XGB_PARAMS = {"eta": 0.03, "max_depth": 4, "min_child_weight": 20, "subsample": 0.8,
-              "colsample_bytree": 0.7, "lambda": 5.0, "tree_method": "hist", "max_bin": 128}
-XGB_ROUNDS, XGB_PATIENCE = 2000, 100
-XGB_TUNE_ROUNDS, XGB_TUNE_PATIENCE, XGB_TUNE_ETA = 300, 40, 0.01
 
 
 def _xgb_reporter(task: str, metric: str, progress: Progress, steps: int):
@@ -123,7 +116,7 @@ def _xgb_reporter(task: str, metric: str, progress: Progress, steps: int):
     class Reporter(xgb.callback.TrainingCallback):
         def after_iteration(self, model, epoch, evals_log) -> bool:
             step = epoch + 1
-            if step % 10 == 1:
+            if step % cfg("training.xgb.report_every") == 1:
                 progress({"task": task, "step": step, "steps": steps,
                           "train_loss": float(evals_log["train"][metric][-1]),
                           "val_loss": float(evals_log["val"][metric][-1])})
@@ -143,7 +136,7 @@ class XGBMatchModel:
         self.league_rounds: dict[str, dict[str, int]] = {}
 
     def _params(self, objective: str, metric: str, **extra: Any) -> dict[str, Any]:
-        return {**XGB_PARAMS, "objective": objective, "eval_metric": metric, "device": self.device, "seed": 7,
+        return {**cfg("training.xgb.params"), "objective": objective, "eval_metric": metric, "device": self.device, "seed": 7,
                 **({"num_class": 3} if objective.startswith("multi") else {}), **extra}
 
     def fit(self, train: pd.DataFrame, progress: Progress = _noop, per_league: bool = True) -> XGBMatchModel:
@@ -154,10 +147,11 @@ class XGBMatchModel:
         for task, (objective, metric, target) in _XGB_TASKS.items():
             d_fit = xgb.DMatrix(x_fit, label=fit_part[target].to_numpy(), missing=np.nan)
             d_val = xgb.DMatrix(x_val, label=val_part[target].to_numpy(), missing=np.nan)
-            booster = xgb.train(self._params(objective, metric), d_fit, XGB_ROUNDS,
-                                evals=[(d_fit, "train"), (d_val, "val")], early_stopping_rounds=XGB_PATIENCE,
-                                verbose_eval=False,
-                                callbacks=[_xgb_reporter(f"global · {task}", metric, progress, XGB_ROUNDS)])
+            rounds = cfg("training.xgb.rounds")
+            booster = xgb.train(self._params(objective, metric), d_fit, rounds,
+                                evals=[(d_fit, "train"), (d_val, "val")],
+                                early_stopping_rounds=cfg("training.xgb.patience"), verbose_eval=False,
+                                callbacks=[_xgb_reporter(f"global · {task}", metric, progress, rounds)])
             self.rounds[task] = int(booster.best_iteration) + 1
             self.boosters[task] = booster[: self.rounds[task]]  # drop the trees grown after the best round
 
@@ -177,11 +171,12 @@ class XGBMatchModel:
             base = self.boosters[task]
             d_fit = xgb.DMatrix(x_fit, label=fit_part[target].to_numpy(), missing=np.nan)
             d_val = xgb.DMatrix(x_val, label=val_part[target].to_numpy(), missing=np.nan)
-            booster = xgb.train(self._params(objective, metric, eta=XGB_TUNE_ETA), d_fit, XGB_TUNE_ROUNDS,
-                                evals=[(d_fit, "train"), (d_val, "val")], early_stopping_rounds=XGB_TUNE_PATIENCE,
+            rounds = cfg("training.xgb.tune_rounds")
+            booster = xgb.train(self._params(objective, metric, eta=cfg("training.xgb.tune_eta")), d_fit, rounds,
+                                evals=[(d_fit, "train"), (d_val, "val")],
+                                early_stopping_rounds=cfg("training.xgb.tune_patience"),
                                 verbose_eval=False, xgb_model=base,
-                                callbacks=[_xgb_reporter(f"{league} · {task}", metric, progress,
-                                                         XGB_TUNE_ROUNDS)])
+                                callbacks=[_xgb_reporter(f"{league} · {task}", metric, progress, rounds)])
             rounds = int(booster.best_iteration) + 1  # counts the global model's trees too
             self.league_rounds[league][task] = rounds
             self.league_boosters[league][task] = booster[:rounds]
@@ -245,8 +240,6 @@ class XGBMatchModel:
 # Neural net (PyTorch)
 # ---------------------------------------------------------------------------
 
-NN_EPOCHS, NN_PATIENCE, NN_BATCH, NN_LR = 80, 8, 512, 1e-3
-NN_TUNE_EPOCHS, NN_TUNE_PATIENCE, NN_TUNE_LR = 30, 5, 2e-4
 
 
 class _Preprocessor:
@@ -276,7 +269,8 @@ class _Preprocessor:
     def transform(self, frame: pd.DataFrame) -> np.ndarray:
         x = frame[self.numeric].to_numpy(dtype=np.float64)
         flags = np.isnan(x[:, self.flag_columns]).astype(np.float64)
-        filled = np.clip((np.where(np.isnan(x), self.medians, x) - self.means) / self.stds, -6, 6)
+        clip = cfg("training.nn.clip_std")
+        filled = np.clip((np.where(np.isnan(x), self.medians, x) - self.means) / self.stds, -clip, clip)
         league = frame["league_code"].to_numpy()
         onehot = np.zeros((len(frame), len(LEAGUE_CODES) + 1))
         onehot[np.arange(len(frame)), np.where(league >= 0, league, len(LEAGUE_CODES)).astype(int)] = 1
@@ -316,12 +310,14 @@ def _build_net(n_inputs: int):
 
         def __init__(self) -> None:
             super().__init__()
-            self.stem = nn.Sequential(nn.Linear(n_inputs, 128), nn.GELU(), nn.Dropout(0.2))
-            self.body = nn.Sequential(Block(128, 0.2), Block(128, 0.2), nn.LayerNorm(128))
-            self.outcome = nn.Linear(128, 3)
-            self.over25 = nn.Linear(128, 1)
-            self.btts = nn.Linear(128, 1)
-            self.goals = nn.Linear(128, 2)
+            width, dropout = cfg("training.nn.width"), cfg("training.nn.dropout")
+            self.stem = nn.Sequential(nn.Linear(n_inputs, width), nn.GELU(), nn.Dropout(dropout))
+            self.body = nn.Sequential(*(Block(width, dropout) for _ in range(cfg("training.nn.blocks"))),
+                                      nn.LayerNorm(width))
+            self.outcome = nn.Linear(width, 3)
+            self.over25 = nn.Linear(width, 1)
+            self.btts = nn.Linear(width, 1)
+            self.goals = nn.Linear(width, 2)
 
         def forward(self, x: torch.Tensor):
             h = self.body(self.stem(x))
@@ -360,7 +356,7 @@ class NeuralMatchModel:
         return (f.cross_entropy(outcome, y_outcome)
                 + f.binary_cross_entropy_with_logits(over, y_over)
                 + f.binary_cross_entropy_with_logits(btts, y_btts)
-                + 0.5 * f.poisson_nll_loss(log_goals, y_goals, log_input=True))
+                + cfg("training.nn.goals_loss_weight") * f.poisson_nll_loss(log_goals, y_goals, log_input=True))
 
     def _train(self, net, rows: pd.DataFrame, lr: float, epochs: int, patience: int,
                task: str, progress: Progress) -> int:
@@ -370,7 +366,7 @@ class NeuralMatchModel:
         fit_part, val_part = time_split(rows)
         x_fit, y_fit = self._tensors(fit_part)
         x_val, y_val = self._tensors(val_part)
-        optimiser = torch.optim.AdamW(net.parameters(), lr=lr, weight_decay=1e-4)
+        optimiser = torch.optim.AdamW(net.parameters(), lr=lr, weight_decay=cfg("training.nn.weight_decay"))
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimiser, T_max=epochs)
         generator = torch.Generator(device="cpu").manual_seed(7)
         best, best_state, best_epoch, waited = float("inf"), None, 0, 0
@@ -378,8 +374,8 @@ class NeuralMatchModel:
             net.train()
             order = torch.randperm(len(x_fit), generator=generator).to(x_fit.device)
             total = 0.0
-            for start in range(0, len(order), NN_BATCH):
-                idx = order[start:start + NN_BATCH]
+            for start in range(0, len(order), cfg("training.nn.batch")):
+                idx = order[start:start + cfg("training.nn.batch")]
                 optimiser.zero_grad()
                 loss = self._loss(net(x_fit[idx]), [t[idx] for t in y_fit])
                 loss.backward()
@@ -410,13 +406,15 @@ class NeuralMatchModel:
         torch.manual_seed(7)
         self.pre.fit(time_split(train)[0])
         self.net = _build_net(self.pre.width).to(torch.device(self.device))
-        self.epochs["global"] = self._train(self.net, train, NN_LR, NN_EPOCHS, NN_PATIENCE,
+        self.epochs["global"] = self._train(self.net, train, cfg("training.nn.learning_rate"),
+                                            cfg("training.nn.epochs"), cfg("training.nn.patience"),
                                             "global · all markets", progress)
         if per_league:
             for league in _tuned_leagues(train):
                 net = copy.deepcopy(self.net)
-                self.epochs[league] = self._train(net, train[train["league"] == league], NN_TUNE_LR,
-                                                  NN_TUNE_EPOCHS, NN_TUNE_PATIENCE, f"{league} · fine-tune", progress)
+                self.epochs[league] = self._train(net, train[train["league"] == league],
+                                                  cfg("training.nn.tune_learning_rate"), cfg("training.nn.tune_epochs"),
+                                                  cfg("training.nn.tune_patience"), f"{league} · fine-tune", progress)
                 self.league_nets[league] = net
         return self
 
@@ -523,7 +521,7 @@ class LeagueChooser:
 
     def choice(self, league: str) -> str:
         g, lg = self.totals.get((league, "global")), self.totals.get((league, "league"))
-        if not g or not lg or lg[1] < 200:
+        if not g or not lg or lg[1] < cfg("training.league_switch_min_rows"):
             return "global"
         return "league" if lg[0] / lg[1] < g[0] / g[1] else "global"
 
@@ -593,7 +591,7 @@ def walk_forward(feats: pd.DataFrame, family: str, first_test_season: int, progr
     out: dict[str, list[pd.DataFrame]] = {v: [] for v in VARIANTS}
     for i, season in enumerate(seasons, start=1):
         train, test = rows[rows["season"] < season], rows[rows["season"] == season]
-        if len(train) < MIN_TRAIN_ROWS or test.empty:
+        if len(train) < cfg("training.min_train_rows") or test.empty:
             continue
 
         def fold_progress(event: dict[str, Any], season=season, i=i) -> None:

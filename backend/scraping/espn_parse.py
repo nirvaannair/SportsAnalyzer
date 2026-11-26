@@ -10,19 +10,18 @@ import re
 from typing import Any
 
 from backend.core.leagues import League
-
-FEED = "https://site.api.espn.com/apis/site/v2/sports/soccer"
+from backend.core.settings import cfg
 
 _CLOCK = re.compile(r"(\d+)'?(?:\s*\+\s*(\d+))?")
 
 
 def scoreboard_url(league: League, month: str) -> str:
     """month as YYYYMM. (The feed accepts a single day or a whole month, not a date range.)"""
-    return f"{FEED}/{league.espn_slug}/scoreboard?dates={month}&limit=1000"
+    return f"{cfg('scraper.espn.feed_url')}/{league.espn_slug}/scoreboard?dates={month}&limit=1000"
 
 
 def summary_url(league: League, event_id: str) -> str:
-    return f"{FEED}/{league.espn_slug}/summary?event={event_id}"
+    return f"{cfg('scraper.espn.feed_url')}/{league.espn_slug}/summary?event={event_id}"
 
 
 def parse_minute(display: str | None) -> int | None:

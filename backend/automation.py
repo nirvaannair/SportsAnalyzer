@@ -17,13 +17,12 @@ from typing import Any
 
 from sqlalchemy.dialects.postgresql import insert
 
+from backend.core.settings import cfg
 from backend.database.engine import AsyncSessionFactory
 from backend.database.models import AppSetting
 
 log = logging.getLogger("sportsanalyzer.automation")
 
-CYCLE_EVERY = timedelta(minutes=15)
-REFRESH_EVERY = timedelta(hours=6)
 
 
 async def _save(state: dict[str, Any]) -> None:
@@ -70,7 +69,7 @@ async def loop() -> None:
     while True:
         now = datetime.now(UTC)
         try:
-            if last_refresh is None or now - last_refresh >= REFRESH_EVERY:
+            if last_refresh is None or now - last_refresh >= timedelta(hours=cfg("automation.refresh_hours")):
                 state["last_refresh"] = {"at": now.isoformat(), **(await refresh_fixtures_and_predictions())}
                 last_refresh = now
             state["last_cycle"] = {"at": datetime.now(UTC).isoformat(), **(await strategy_cycle())}
@@ -83,9 +82,9 @@ async def loop() -> None:
         except Exception as exc:  # keep the loop alive; show the problem on the dashboard
             log.exception("automation cycle failed")
             state["last_error"] = {"at": datetime.now(UTC).isoformat(), "error": f"{type(exc).__name__}: {exc}"}
-        state["next_cycle_at"] = (datetime.now(UTC) + CYCLE_EVERY).isoformat()
+        state["next_cycle_at"] = (datetime.now(UTC) + timedelta(minutes=cfg("automation.cycle_minutes"))).isoformat()
         try:
             await _save(state)
         except Exception:
             log.exception("could not save automation state")
-        await asyncio.sleep(CYCLE_EVERY.total_seconds())
+        await asyncio.sleep(cfg("automation.cycle_minutes") * 60)

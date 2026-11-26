@@ -2,6 +2,8 @@
 .env
 .env.*
 !.env.example
+# Dashboard start-up config (no secrets)
+!frontend/.env
 
 # Python
 __pycache__/
@@ -54,3 +56,4 @@ frontend/dist/
 data/scraper/
 data/models/
 data/training/
+config/settings.local.json

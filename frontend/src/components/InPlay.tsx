@@ -1,12 +1,13 @@
 import { useQuery } from '@tanstack/react-query'
 import { api } from '../lib/api'
 import { Card, CardHeader } from './ui'
+import { refresh } from '../lib/settings'
 
 const rupees = (v: number) => `₹${v.toLocaleString('en-IN', { maximumFractionDigits: 2 })}`
 
 /** What's riding right now, and what it would pay if everything wins. */
 export default function InPlay() {
-  const exposure = useQuery({ queryKey: ['exposure'], queryFn: api.exposure, refetchInterval: 15000 })
+  const exposure = useQuery({ queryKey: ['exposure'], queryFn: api.exposure, refetchInterval: refresh('normal') })
   const e = exposure.data
   const rows: [string, string, number, number][] = e
     ? [

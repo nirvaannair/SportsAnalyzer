@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Guide, type GuideItem } from '../components/Guide'
 import { Badge, Card, CardHeader, EmptyState, PageHeader, StatusDot } from '../components/ui'
 import { api, type TrainingRun, type TrainingScore } from '../lib/api'
+import { refresh, setting } from '../lib/settings'
 
 const STATUS_TONE: Record<TrainingRun['status'], 'ok' | 'warn' | 'off' | 'bad'> = {
   queued: 'off', running: 'warn', finished: 'ok', failed: 'bad', stopped: 'off',
@@ -91,11 +92,19 @@ function LossChart({ curve }: { curve: [number, number, number][] }) {
 function NewRun({ disabled }: { disabled: boolean }) {
   const queryClient = useQueryClient()
   const info = useQuery({ queryKey: ['training', 'info'], queryFn: api.trainingInfo })
-  const [models, setModels] = useState<string[]>(['xgb', 'nn'])
-  const [first, setFirst] = useState(2018)
-  const [groups, setGroups] = useState<Record<string, boolean>>({ players: false, news: false })
+  const competitions = useQuery({ queryKey: ['competitions'], queryFn: api.competitions })
+  const [models, setModels] = useState<string[] | null>(null)
+  const [first, setFirst] = useState<number | null>(null)
+  const [groups, setGroups] = useState<Record<string, boolean> | null>(null)
+  // Defaults come from the API (settings + data); the owner's picks override them.
+  const chosenModels = models ?? (info.data?.models.map((m) => m.name) ?? [])
+  const chosenFirst = first ?? info.data?.default_first_test_season ?? null
+  const chosenGroups = groups ?? info.data?.default_feature_groups ?? {}
+  // Seasons with results, except the first (needed for training) and the current one (not finished).
+  const seasons = [...new Set((competitions.data ?? []).flatMap((c) => c.seasons.map((s) => s.start_year)))].sort()
+  const seasonOptions = seasons.slice(1, -1)
   const start = useMutation({
-    mutationFn: () => api.startTraining({ models, first_test_season: first, feature_groups: groups }),
+    mutationFn: () => api.startTraining({ models: chosenModels, first_test_season: chosenFirst, feature_groups: chosenGroups }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['training'] }),
   })
   const missing = info.data && (!info.data.libraries.xgboost || !info.data.libraries.torch)
@@ -111,8 +120,8 @@ function NewRun({ disabled }: { disabled: boolean }) {
         <div className="space-y-2">
           {(info.data?.models ?? []).map((m) => (
             <label key={m.name} className="flex cursor-pointer items-start gap-3 rounded-lg border border-zinc-200 p-3 hover:bg-zinc-50 dark:border-zinc-800 dark:hover:bg-zinc-800/40">
-              <input type="checkbox" className="mt-0.5 accent-zinc-900 dark:accent-zinc-100" checked={models.includes(m.name)}
-                     onChange={() => setModels((l) => (l.includes(m.name) ? l.filter((x) => x !== m.name) : [...l, m.name]))} />
+              <input type="checkbox" className="mt-0.5 accent-zinc-900 dark:accent-zinc-100" checked={chosenModels.includes(m.name)}
+                     onChange={() => setModels(chosenModels.includes(m.name) ? chosenModels.filter((x) => x !== m.name) : [...chosenModels, m.name])} />
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2 text-sm font-medium">
                   {m.label} {m.saved && <Badge tone="accent">trained</Badge>}
@@ -129,21 +138,21 @@ function NewRun({ disabled }: { disabled: boolean }) {
             ['news', 'News features', 'News mood, volume and injury stories in the 7 days before each match (needs weeks of news history).'],
           ].map(([key, label, about]) => (
             <label key={key} className="flex cursor-pointer items-start gap-2">
-              <input type="checkbox" className="mt-0.5 accent-zinc-900 dark:accent-zinc-100" checked={groups[key]}
-                     onChange={(e) => setGroups((g) => ({ ...g, [key]: e.target.checked }))} />
+              <input type="checkbox" className="mt-0.5 accent-zinc-900 dark:accent-zinc-100" checked={Boolean(chosenGroups[key])}
+                     onChange={(e) => setGroups({ ...chosenGroups, [key]: e.target.checked })} />
               <span><span className="font-medium">{label}</span> <span className="text-xs text-zinc-500 dark:text-zinc-400">{about}</span></span>
             </label>
           ))}
         </div>
         <div className="flex flex-wrap items-center gap-2 text-sm">
           <span className="text-zinc-500 dark:text-zinc-400">Backtest from season</span>
-          <select value={first} onChange={(e) => setFirst(Number(e.target.value))}
+          <select value={chosenFirst ?? ''} onChange={(e) => setFirst(Number(e.target.value))}
                   className="rounded-lg border border-zinc-200 bg-white px-2 py-1.5 text-sm dark:border-zinc-800 dark:bg-zinc-900">
-            {[2017, 2018, 2019, 2020, 2021, 2022, 2023].map((y) => <option key={y} value={y}>{y}/{String((y + 1) % 100).padStart(2, '0')}</option>)}
+            {seasonOptions.map((y) => <option key={y} value={y}>{y}/{String((y + 1) % 100).padStart(2, '0')}</option>)}
           </select>
           <button
             onClick={() => start.mutate()}
-            disabled={disabled || models.length === 0 || start.isPending || Boolean(missing)}
+            disabled={disabled || chosenModels.length === 0 || chosenFirst === null || start.isPending || Boolean(missing)}
             className="ml-auto flex items-center gap-1.5 rounded-lg bg-zinc-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-zinc-700 disabled:opacity-40 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
           >
             <Play className="size-3.5" /> Train
@@ -170,8 +179,10 @@ function Progress({ run }: { run: TrainingRun }) {
   const familyIdx = Math.max(0, run.models.indexOf(p.model ?? ''))
   const perFamily = 1 / run.models.length
   let overall = familyIdx * perFamily
-  if (p.stage === 'backtest') overall += perFamily * 0.85 * (foldShare + stepShare / (p.folds || 1))
-  if (p.stage === 'final') overall += perFamily * (0.85 + 0.15 * stepShare)
+  const folds = p.folds || 1
+  const backtestShare = folds / (folds + 1)  // the final fit is about one more fold of work
+  if (p.stage === 'backtest') overall += perFamily * backtestShare * (foldShare + stepShare / folds)
+  if (p.stage === 'final') overall += perFamily * (backtestShare + (1 - backtestShare) * stepShare)
   if (p.stage === 'done') overall += perFamily
   if (run.status === 'finished') overall = 1
 
@@ -303,7 +314,7 @@ function TrainingGuide({ run }: { run?: TrainingRun }) {
   const scraped = useQuery({ queryKey: ['scraper', 'totals'], queryFn: api.scraperTotals })
   const market = models.data?.[0]?.metrics.market_reference_1x2?.logloss
   const baseline = models.data?.[0]?.metrics.baseline_1x2.logloss
-  const blend = models.data?.find((m) => m.model === 'blend')?.metrics['1x2'].logloss ?? 1.0244
+  const blend = models.data?.find((m) => m.model === setting<string>('strategies.default_model'))?.metrics['1x2'].logloss
   const scores: TrainingScore[] = Object.entries(run?.results ?? {})
     .filter(([key]) => key !== 'data')
     .flatMap(([, r]) => Object.values((r as { variants?: Record<string, TrainingScore> } | undefined)?.variants ?? {}))
@@ -325,15 +336,15 @@ function TrainingGuide({ run }: { run?: TrainingRun }) {
       body: gap === undefined ? 'Train a model to see.' : gap < 0
         ? `Yes, by ${(-gap).toFixed(4)}. This is the condition for betting to pay off long term.`
         : `Not yet: our best model is ${gap.toFixed(4)} worse. Bets would lose money on average, so keep strategies in paper mode. Player and injury data is the plan to close the gap.`,
-      verdict: gap === undefined ? 'info' : gap < 0 ? 'good' : gap < 0.008 ? 'medium' : 'bad',
+      verdict: gap === undefined ? 'info' : gap < 0 ? 'good' : gap < setting<number>('verdicts.market_gap_medium') ? 'medium' : 'bad',
       verdictLabel: gap === undefined ? 'No run yet' : gap < 0 ? 'Beating market' : 'Behind market',
     },
     {
       title: 'Are the ML models better than before?',
-      body: best === undefined ? 'Train a model to see.'
-        : `Best ML model ${best.toFixed(4)} vs the old Elo + Dixon-Coles blend ${blend.toFixed(4)}. Lower is better${best < blend ? ', so the new models are an improvement' : ''}.`,
-      verdict: best === undefined ? 'info' : best < blend ? 'good' : 'medium',
-      verdictLabel: best !== undefined && best < blend ? 'Improved' : undefined,
+      body: best === undefined || blend === undefined ? 'Train a model (and run the classic backtest) to compare.'
+        : `Best ML model ${best.toFixed(4)} vs the classic model ${blend.toFixed(4)}. Lower is better${best < blend ? ', so the new models are an improvement' : ''}.`,
+      verdict: best === undefined || blend === undefined ? 'info' : best < blend ? 'good' : 'medium',
+      verdictLabel: best !== undefined && blend !== undefined && best < blend ? 'Improved' : undefined,
     },
     {
       title: 'Favourite won',
@@ -342,7 +353,7 @@ function TrainingGuide({ run }: { run?: TrainingRun }) {
     },
     {
       title: 'O/U 2.5 and BTTS',
-      body: 'The same score for Over/Under 2.5 goals and both teams to score. A coin flip scores 0.693, so 0.680 means a small but real edge in knowing which games will be open.',
+      body: `The same score for Over/Under 2.5 goals and both teams to score. A coin flip scores ${setting<number>('verdicts.small_edge_logloss')}; anything below that is a real edge in knowing which games will be open.`,
       verdict: 'medium', verdictLabel: 'Small edge',
     },
     {
@@ -356,8 +367,8 @@ function TrainingGuide({ run }: { run?: TrainingRun }) {
         (football-data.co.uk results and match stats for all 10 leagues), plenty for team models. Player-level: only
         {lineups !== undefined ? ` ${lineups.toLocaleString('en-IN')}` : ' a few hundred'} matches have lineups so far; the ESPN backfill and
         API-Football collector are filling this in.</>,
-      verdict: lineups !== undefined && lineups > 15000 ? 'good' : 'medium',
-      verdictLabel: lineups !== undefined && lineups > 15000 ? 'Enough' : 'Team data yes, player data growing',
+      verdict: lineups !== undefined && lineups > setting<number>('verdicts.lineups_enough') ? 'good' : 'medium',
+      verdictLabel: lineups !== undefined && lineups > setting<number>('verdicts.lineups_enough') ? 'Enough' : 'Team data yes, player data growing',
     },
   ]
   return <Guide items={items} />
@@ -365,7 +376,7 @@ function TrainingGuide({ run }: { run?: TrainingRun }) {
 
 export default function Training() {
   const queryClient = useQueryClient()
-  const runs = useQuery({ queryKey: ['training', 'runs'], queryFn: api.trainingRuns, refetchInterval: 3000 })
+  const runs = useQuery({ queryKey: ['training', 'runs'], queryFn: api.trainingRuns, refetchInterval: refresh('live') })
   const list = runs.data ?? []
   const active = list.find(isActive)
   const [selected, setSelected] = useState<number | null>(null)
@@ -376,14 +387,14 @@ export default function Training() {
     queryKey: ['training', 'run', runId],
     queryFn: () => api.trainingRun(runId!),
     enabled: runId !== null,
-    refetchInterval: (q) => (isActive(q.state.data) ? 1500 : false),
+    refetchInterval: (q) => (isActive(q.state.data) ? refresh('training_live') : false),
   })
   const run = detail.data
   const log = useQuery({
     queryKey: ['training', 'log', runId],
     queryFn: () => api.trainingLog(runId!),
     enabled: runId !== null,
-    refetchInterval: isActive(run) ? 3000 : false,
+    refetchInterval: isActive(run) ? refresh('live') : false,
   })
   const logRef = useRef<HTMLPreElement>(null)
   useEffect(() => { if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight }, [log.data])

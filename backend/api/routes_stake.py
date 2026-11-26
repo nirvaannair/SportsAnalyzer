@@ -22,6 +22,7 @@ from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.core.settings import cfg
 from backend.database.engine import AsyncSessionFactory
 from backend.database.models import (
     AppSetting,
@@ -64,9 +65,6 @@ from backend.integrations.raw import RawPayload
 
 router = APIRouter(prefix="/api/stake")
 
-HELPER_STALE_SECONDS = 30
-ACTIVE_LIST_LIMIT = 50  # the helper asks Stake for this many open bets
-SENT_TIMEOUT = timedelta(minutes=2)
 _SECRET_KEYS = ("token", "authorization", "cookie", "password", "session")
 
 
@@ -127,7 +125,7 @@ async def status() -> dict[str, Any]:
             select(StakeOrder.status, func.count()).group_by(StakeOrder.status))).all())
     last_seen = helper.get("last_seen")
     connected = bool(last_seen) and (
-        datetime.now(UTC) - datetime.fromisoformat(last_seen)).total_seconds() < HELPER_STALE_SECONDS
+        datetime.now(UTC) - datetime.fromisoformat(last_seen)).total_seconds() < cfg("stake.helper_stale_seconds")
     return {
         "helper": {**helper, "connected": connected},
         "execution_enabled": enabled, "learn_mode": learn,
@@ -271,7 +269,7 @@ async def heartbeat(body: Heartbeat) -> dict[str, Any]:
             if op:
                 variables = dict(op.sample_variables or {})
                 if "limit" in variables:
-                    variables["limit"] = ACTIVE_LIST_LIMIT  # all open bets, not just the first few
+                    variables["limit"] = cfg("stake.active_list_limit")  # all open bets, not just the first few
                 bet_list_request = {"operationName": op.operation_name, "query": op.query, "variables": variables}
         await session.commit()
     return {"learn_mode": learn, "execution_enabled": enabled, "poll_seconds": 5,
@@ -344,7 +342,7 @@ async def next_order() -> dict[str, Any]:
     async with AsyncSessionFactory() as session:
         # An order "sent" but never answered is marked failed (not retried: it may have gone through).
         stale = (await session.execute(select(StakeOrder).where(
-            StakeOrder.status == "sent", StakeOrder.sent_at < datetime.now(UTC) - SENT_TIMEOUT))).scalars().all()
+            StakeOrder.status == "sent", StakeOrder.sent_at < datetime.now(UTC) - timedelta(minutes=cfg("stake.sent_timeout_minutes"))))).scalars().all()
         for o in stale:
             o.status, o.finished_at = "failed", datetime.now(UTC)
             o.status_detail = "No answer from the helper within 2 minutes. Check My Bets on Stake before retrying."
@@ -443,7 +441,7 @@ async def helper_bets(body: BetList) -> dict[str, Any]:
         await _store_stake_bets(session, bets)
         # A bet that has left Stake's active list is settled (or cashed out). Only trust a full
         # list: one that is really the active list and shorter than the requested page size.
-        if listed is not None and len(listed) < ACTIVE_LIST_LIMIT:
+        if listed is not None and len(listed) < cfg("stake.active_list_limit"):
             seen = {b["id"] for b in bets}
             for bet in (await session.execute(select(StakeBet))).scalars().all():
                 if bet.id not in seen and _is_open(bet):

@@ -1,6 +1,7 @@
 import { ChevronDown, Lightbulb } from 'lucide-react'
 import { useEffect, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
+import { setting } from '../lib/settings'
 
 export type Verdict = 'good' | 'medium' | 'bad' | 'info'
 export type GuideItem = { title: string; body: ReactNode; verdict?: Verdict; verdictLabel?: string }
@@ -23,16 +24,16 @@ export function VerdictBadge({ verdict, label }: { verdict: Verdict; label?: str
 
 /** The rail exists in App; it is only visible on very wide screens. */
 export const GUIDE_RAIL_ID = 'guide-rail'
-const WIDE = '(min-width: 1536px)'
 
 function useWide() {
-  const [wide, setWide] = useState(() => typeof window !== 'undefined' && window.matchMedia(WIDE).matches)
+  const query = `(min-width: ${setting<number>('ui.wide_screen_px')}px)`
+  const [wide, setWide] = useState(() => typeof window !== 'undefined' && window.matchMedia(query).matches)
   useEffect(() => {
-    const query = window.matchMedia(WIDE)
-    const update = () => setWide(query.matches)
-    query.addEventListener('change', update)
-    return () => query.removeEventListener('change', update)
-  }, [])
+    const media = window.matchMedia(query)
+    const update = () => setWide(media.matches)
+    media.addEventListener('change', update)
+    return () => media.removeEventListener('change', update)
+  }, [query])
   return wide
 }
 

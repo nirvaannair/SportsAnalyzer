@@ -1,0 +1,470 @@
+# SportsAnalyzer settings: every tunable value lives here, not in the code.
+#
+# * Edit this file, or change values on the dashboard's Settings page (those changes are saved to
+#   config/settings.local.json, which overrides this file and is not committed).
+# * Most values apply at once. Leagues and providers apply after a restart (Stop, then Start).
+# * Money limits and API keys stay in .env (secret / personal).
+# * What stays in code on purpose: names (database columns, feature names, status words such as
+#   "finished"), the three markets (1X2, Over/Under 2.5, BTTS) and pure maths constants.
+
+[app]
+user_agent = "SportsAnalyzer/0.1 (personal research tool)"
+
+# Data sources listed on the Overview / Data sources pages, and the .env variable holding each key.
+data_sources = [
+  { name = "fdcuk", label = "football-data.co.uk", key_env = "" },
+  { name = "api_football", label = "API-Football", key_env = "API_FOOTBALL_API_KEY" },
+  { name = "football_data", label = "football-data.org", key_env = "FOOTBALL_DATA_API_KEY" },
+  { name = "thesportsdb", label = "TheSportsDB", key_env = "THESPORTSDB_API_KEY" },
+  { name = "odds_api", label = "The Odds API", key_env = "ODDS_API_KEY" },
+  { name = "stake", label = "Stake", key_env = "STAKE_ACCESS_TOKEN" },
+]
+
+# ---------------------------------------------------------------------------------------------
+# Leagues we track, with each provider's identifier for them.
+# ---------------------------------------------------------------------------------------------
+[[leagues]]
+code = "ENG1"
+name = "Premier League"
+country = "England"
+tier = 1
+fdcuk = "E0"
+api_football = 39
+espn = "eng.1"
+thesportsdb = 4328
+football_data_org = "PL"
+stake_names = ["premier league"]
+timezone = "Europe/London"
+
+[[leagues]]
+code = "ENG2"
+name = "Championship"
+country = "England"
+tier = 2
+fdcuk = "E1"
+api_football = 40
+espn = "eng.2"
+thesportsdb = 4329
+football_data_org = "ELC"
+stake_names = ["championship"]
+timezone = "Europe/London"
+
+[[leagues]]
+code = "ESP1"
+name = "La Liga"
+country = "Spain"
+tier = 1
+fdcuk = "SP1"
+api_football = 140
+espn = "esp.1"
+thesportsdb = 4335
+football_data_org = "PD"
+stake_names = ["laliga", "la liga"]
+timezone = "Europe/London"
+
+[[leagues]]
+code = "ESP2"
+name = "Segunda División"
+country = "Spain"
+tier = 2
+fdcuk = "SP2"
+api_football = 141
+espn = "esp.2"
+thesportsdb = 4400
+football_data_org = ""
+stake_names = ["laliga 2", "laliga hypermotion", "segunda division"]
+timezone = "Europe/London"
+
+[[leagues]]
+code = "ITA1"
+name = "Serie A"
+country = "Italy"
+tier = 1
+fdcuk = "I1"
+api_football = 135
+espn = "ita.1"
+thesportsdb = 4332
+football_data_org = "SA"
+stake_names = ["serie a"]
+timezone = "Europe/London"
+
+[[leagues]]
+code = "ITA2"
+name = "Serie B"
+country = "Italy"
+tier = 2
+fdcuk = "I2"
+api_football = 136
+espn = "ita.2"
+thesportsdb = 4394
+football_data_org = ""
+stake_names = ["serie b"]
+timezone = "Europe/London"
+
+[[leagues]]
+code = "GER1"
+name = "Bundesliga"
+country = "Germany"
+tier = 1
+fdcuk = "D1"
+api_football = 78
+espn = "ger.1"
+thesportsdb = 4331
+football_data_org = "BL1"
+stake_names = ["bundesliga"]
+timezone = "Europe/London"
+
+[[leagues]]
+code = "GER2"
+name = "2. Bundesliga"
+country = "Germany"
+tier = 2
+fdcuk = "D2"
+api_football = 79
+espn = "ger.2"
+thesportsdb = 4399
+football_data_org = ""
+openligadb = "bl2"
+stake_names = ["2. bundesliga", "2nd bundesliga"]
+timezone = "Europe/London"
+
+[[leagues]]
+code = "FRA1"
+name = "Ligue 1"
+country = "France"
+tier = 1
+fdcuk = "F1"
+api_football = 61
+espn = "fra.1"
+thesportsdb = 4334
+football_data_org = "FL1"
+stake_names = ["ligue 1"]
+timezone = "Europe/London"
+
+[[leagues]]
+code = "FRA2"
+name = "Ligue 2"
+country = "France"
+tier = 2
+fdcuk = "F2"
+api_football = 62
+espn = "fra.2"
+thesportsdb = 4401
+football_data_org = ""
+stake_names = ["ligue 2"]
+timezone = "Europe/London"
+
+# ---------------------------------------------------------------------------------------------
+# Background jobs inside the API server
+# ---------------------------------------------------------------------------------------------
+[automation]
+cycle_minutes = 15          # settle bets, run strategies, keep the scraper going
+refresh_hours = 6           # refresh fixtures and re-predict upcoming matches
+
+# ---------------------------------------------------------------------------------------------
+# ESPN scraper (Scrapy)
+# ---------------------------------------------------------------------------------------------
+[scraper]
+history_start = "2019-07-01"    # oldest date the history backfill goes back to
+newest_first_years = 2          # backfill the last N years first, then the rest in chunks
+chunk_years = 2                 # size of each older chunk
+recent_every_hours = 6          # after the backfill: refresh recent matches this often
+recent_days_back = 10
+recent_days_ahead = 14
+load_every_minutes = 15         # load lineups this often while a long crawl runs
+download_delay_seconds = 2.0    # gap between requests to one site
+retry_times = 3
+retry_codes = [500, 502, 504, 522, 524, 408]      # retried straight away (429/503 wait instead, below)
+never_cache_codes = [403, 404, 429, 500, 502, 503, 504]
+concurrent_requests = 4
+concurrent_requests_per_site = 1
+autothrottle_max_delay_seconds = 30.0
+
+cache_expiry_seconds = 0         # 0 = finished-match pages are cached forever
+
+[scraper.component_order]        # Scrapy runs its plug-ins in this order (lower first)
+rate_limit_wait = 560
+save_items = 300
+run_stats = 500
+
+[scraper.rate_limit]            # what to do when a site says "too many requests"
+wait_codes = [429, 503]
+first_wait_seconds = 60
+max_wait_seconds = 900
+max_waits_per_page = 12
+
+[scraper.espn]
+feed_url = "https://site.api.espn.com/apis/site/v2/sports/soccer"
+
+# ---------------------------------------------------------------------------------------------
+# News
+# ---------------------------------------------------------------------------------------------
+[news]
+every_minutes = 60              # how often the news spider runs
+articles_per_league = 100       # how many articles to ask ESPN for per league
+feature_days = 7                # news features look at this many days before kickoff
+headline_weight = 2             # headline words count this many times
+mood_positive_above = 0.15      # Team news page: mood labels
+mood_negative_below = -0.15
+
+[news.words]
+positive = ["win", "wins", "won", "victory", "victories", "beat", "beats", "thrash", "thrashed", "rout", "routed",
+  "unbeaten", "winning run", "winning streak", "top of the table", "go top", "goes top", "title race", "comeback",
+  "boost", "boosted", "returns", "return from injury", "back in training", "fit again", "record", "stunning",
+  "impressive", "dominant", "dominate", "clinch", "clinched", "extend lead", "extends lead", "in form", "flying",
+  "brilliant", "masterclass", "hat-trick", "clean sheet", "promotion", "promoted", "back to winning",
+  "statement win", "cruise", "cruised"]
+negative = ["loss", "lose", "loses", "lost", "defeat", "defeats", "defeated", "beaten", "crisis", "sacked", "sack",
+  "under pressure", "pressure mounts", "slump", "winless", "without a win", "relegation", "relegated",
+  "bottom of the table", "injury", "injured", "ruled out", "out for", "sidelined", "suspended", "suspension", "ban",
+  "banned", "doubt", "doubtful", "setback", "blow", "turmoil", "row", "fined", "embarrass", "humiliat", "collapse",
+  "collapsed", "struggle", "struggling", "poor form", "dropped points", "draw blank", "frustrat", "dismal", "woeful",
+  "red card", "sent off", "unrest", "protest", "points deduction", "error", "errors", "costly", "blunder",
+  "mistake", "mistakes", "overshadow", "concern", "concerns", "worry", "worried", "blasts", "slams", "criticis",
+  "miss out", "disappointing", "disappointment"]
+injury = ["injury", "injured", "ruled out", "sidelined", "out for", "hamstring", "knee", "ankle", "groin", "calf",
+  "thigh", "muscle", "surgery", "fitness doubt", "doubtful", "set to miss", "will miss", "misses", "concussion",
+  "fracture", "ligament", "acl", "strain", "knock"]
+manager = ["sacked", "sack", "manager", "head coach", "coach", "appointed", "resign", "interim", "under pressure"]
+form = ["unbeaten", "winless", "winning run", "losing run", "streak", "in form", "poor form", "slump", "run of"]
+transfer = ["transfer", "signs", "signing", "bid", "loan", "deal", "linked with", "rumour", "rumor"]
+betting = ["odds", "betting", "bet ", "bookmaker", "tips", "prediction", "accumulator", "acca"]   # removed before scoring
+prefixes = ["humiliat", "frustrat", "embarrass", "criticis"]   # stems that match any ending
+
+# ---------------------------------------------------------------------------------------------
+# Free-plan API collector (Data sources page)
+# ---------------------------------------------------------------------------------------------
+[collector]
+max_attempts = 3
+followup_priority = 50          # per-match requests run after league-level ones
+retry_after_seconds = 60        # back-off after "too many requests"
+forbidden_endpoint_words = ["odds", "bookmaker", "bets"]
+
+[collector.providers.api_football]
+label = "API-Football"
+base_url = "https://v3.football.api-sports.io"
+plan = "Free: 100 requests/day, 10/minute, seasons 2022–2024"
+seasons = [2024, 2023, 2022]    # seasons the free plan serves (newest first)
+min_interval_seconds = 7.0
+plan_daily_limit = 100
+default_daily_budget = 90
+key_env = "API_FOOTBALL_API_KEY"
+key_header = "x-apisports-key"
+signup_url = "https://dashboard.api-football.com/register"
+collects = "Injuries per league and season, fixture lists, then per-match player stats (minutes, rating, shots, passes, duels) for every fixture, newest first."
+
+[collector.providers.football_data_org]
+label = "football-data.org"
+base_url = "https://api.football-data.org"
+plan = "Free: 10 requests/minute, 12 competitions incl. Champions League"
+seasons_back = 3                # current season and the N-1 before it
+extra_competitions = { CL = "Champions League", EC = "European Championship" }
+min_interval_seconds = 7.0
+default_daily_budget = 500
+key_env = "FOOTBALL_DATA_API_KEY"
+key_header = "X-Auth-Token"
+signup_url = "https://www.football-data.org/client/register"
+collects = "Squads and matches for the top divisions plus the Champions League and Euros, which link teams across leagues."
+
+[collector.providers.openligadb]
+label = "OpenLigaDB"
+base_url = "https://api.openligadb.de"
+plan = "Free, no key (community project; we keep it gentle)"
+league_shortcuts = { GER1 = "bl1", GER2 = "bl2" }
+min_interval_seconds = 3.0
+default_daily_budget = 200
+collects = "Bundesliga and 2. Bundesliga matches with goal minutes and scorers."
+
+[collector.providers.thesportsdb]
+label = "TheSportsDB"
+base_url = "https://www.thesportsdb.com/api/v1/json"
+plan = "Free test key: about 30 requests/minute"
+default_key = "123"
+key_env_optional = "THESPORTSDB_API_KEY"
+min_interval_seconds = 3.0
+default_daily_budget = 100
+collects = "Team metadata (stadium, founded, badges) for the tracked leagues."
+
+# ---------------------------------------------------------------------------------------------
+# Machine-learning training
+# ---------------------------------------------------------------------------------------------
+[training]
+first_test_seasons_after_start = 3   # default backtest start = first season with data + this many
+warmup_days = 365               # matches need this much history before they are used for training
+validation_share = 0.15         # latest share of training matches held out for early stopping
+min_train_rows = 500            # a season fold needs at least this many earlier matches
+min_league_rows = 1000          # leagues with fewer training matches use only the global model
+league_switch_min_rows = 200    # "auto" only switches a league to its own model after this many scored matches
+default_feature_groups = { players = false, news = false }
+
+[training.xgb]
+rounds = 2000
+patience = 100
+tune_rounds = 300
+tune_patience = 40
+tune_eta = 0.01
+report_every = 10
+params = { eta = 0.03, max_depth = 4, min_child_weight = 20, subsample = 0.8, colsample_bytree = 0.7, lambda = 5.0, tree_method = "hist", max_bin = 128 }
+
+[training.nn]
+epochs = 80
+patience = 8
+batch = 512
+learning_rate = 0.001
+tune_epochs = 30
+tune_patience = 5
+tune_learning_rate = 0.0002
+width = 128
+blocks = 2
+dropout = 0.2
+weight_decay = 0.0001
+goals_loss_weight = 0.5
+clip_std = 6.0
+
+# ---------------------------------------------------------------------------------------------
+# Features (all point-in-time, never odds)
+# ---------------------------------------------------------------------------------------------
+[features]
+form_windows = [5, 10]
+venue_window = 5
+ewm_halflife_matches = 8
+rest_days_cap = 30
+season_length_matches = 40
+rating_k = 0.06                 # attack/defence rating learning rate
+rating_k_mu = 0.01              # league scoring-level learning rate
+rating_tier_start = { 1 = 0.0, 2 = -0.25 }
+rating_start_goals = 1.3
+rating_start_shots_on_target = 4.2
+rating_home_advantage_start = 0.2
+head_to_head_meetings = 6
+
+[elo]
+k = 20.0
+home_advantage = 65.0
+start_rating_by_tier = { 1 = 1500.0, 2 = 1350.0 }
+season_regression = 0.2
+goal_multiplier = 1.45        # bigger wins move ratings more: log(goal difference + 1) x this
+warmup_days = 365
+
+# ---------------------------------------------------------------------------------------------
+# Players
+# ---------------------------------------------------------------------------------------------
+[players]
+shrink_90s = 8.0                # ratings need ~this many full matches on and off to move halfway
+half_life_days = 365            # older matches fade with this half-life
+regular_window_matches = 6      # "regulars" = 11 most-used players over this many matches
+current_days = 150              # "current player" = played for the club within this many days of its latest match
+active_club_days = 365
+min_minutes_for_xi = 270
+list_min_minutes = 900          # Players page default
+formation = { GK = 1, DEF = 4, MID = 3, FWD = 3 }
+cache_seconds = 600
+impact_highlight = 0.15         # Players page: impact above/below this is coloured
+
+# ---------------------------------------------------------------------------------------------
+# Evaluation, strategies, Stake matching
+# ---------------------------------------------------------------------------------------------
+[evaluation]
+edge_thresholds = [0.03, 0.05, 0.10]
+calibration_bins = 10
+calibration_min_count = 20
+
+[strategies]
+min_stake = 1.0                 # ₹, Stake's smallest INR bet we use
+min_minutes_before_kickoff = 10
+lookahead_days = 4
+stake_price_max_age_hours = 6
+default_model = "blend"
+
+# Strategies created the first time the app starts (all off, paper mode). Edit freely.
+[[strategies.starters]]
+name = "Steady (flat 2%)"
+kind = "flat"
+stake_pct = 2
+reinvest_pct = 0
+min_edge = 0.05
+
+[[strategies.starters]]
+name = "Compounder (flat 2%, reinvest 100%)"
+kind = "flat"
+stake_pct = 2
+reinvest_pct = 100
+min_edge = 0.05
+
+[[strategies.starters]]
+name = "Kelly quarter"
+kind = "kelly"
+kelly_fraction = 0.25
+reinvest_pct = 50
+min_edge = 0.07
+
+[[strategies.starters]]
+name = "Value outsiders (20-50%)"
+kind = "flat"
+stake_pct = 1
+reinvest_pct = 50
+min_edge = 0.08
+min_prob = 0.2
+max_prob = 0.5
+
+[[strategies.starters]]
+name = "Treble (3-leg multi)"
+kind = "multi"
+multi_legs = 3
+stake_pct = 1
+reinvest_pct = 100
+min_edge = 0.1
+min_prob = 0.4
+max_prob = 0.85
+
+[stake]
+helper_stale_seconds = 30
+active_list_limit = 50
+sent_timeout_minutes = 2
+cashout_leg_factor = 0.9617     # estimate only; calibrated on the owner's screen
+min_team_similarity = 0.45
+min_margin = 0.15
+
+[identity]
+min_fixtures = 5
+auto_accept = 0.80
+max_runner_up = 0.40
+
+# ---------------------------------------------------------------------------------------------
+# Plain-English guide verdicts (good / medium / needs work)
+# ---------------------------------------------------------------------------------------------
+[verdicts]
+market_gap_medium = 0.008       # behind the bookmakers by less than this = medium
+calibration_good = 0.015
+calibration_medium = 0.03
+roi_good = 0.02
+roi_medium = -0.03
+lineups_enough = 15000          # matches with lineups for player features to be "enough"
+lineups_some = 3000
+news_enough = 5000              # articles for news features to be "enough"
+matches_plenty = 40000
+small_edge_logloss = 0.693      # coin flip for yes/no markets
+
+[dixon_coles]
+half_life_days = 365.0
+window_days = 1095
+l2 = 0.002
+max_goals = 10
+
+[ingestion]
+fdcuk_request_gap_seconds = 1.5
+
+# ---------------------------------------------------------------------------------------------
+# Dashboard
+# ---------------------------------------------------------------------------------------------
+[ui]
+wide_screen_px = 1536           # the plain-English guide becomes a side column at this width
+
+[ui.refresh_seconds]            # how often pages re-ask the API for fresh numbers
+live = 3
+fast = 5
+medium = 10
+normal = 15
+slow = 30
+minute = 60
+training_live = 1.5

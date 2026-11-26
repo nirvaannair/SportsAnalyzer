@@ -28,12 +28,12 @@ import pandas as pd
 from sqlalchemy import select, update
 
 from backend.core.config import PROJECT_ROOT
+from backend.core.settings import cfg
 from backend.database.models import TrainingRun
 from backend.scraping.db import engine
 
 MODEL_DIR = PROJECT_ROOT / "data" / "models"
 LOG_DIR = PROJECT_ROOT / "data" / "training"
-DEFAULT_FIRST_TEST_SEASON = 2018
 ACTIVE = ("queued", "running")
 
 
@@ -46,18 +46,34 @@ def _set(run_id: int, **values: Any) -> None:
         connection.execute(update(TrainingRun).where(TrainingRun.id == run_id).values(**values))
 
 
-def create_run(models: list[str], first_test_season: int = DEFAULT_FIRST_TEST_SEASON,
+def default_first_test_season() -> int:
+    """The first season with match data, plus training.first_test_seasons_after_start warm-up seasons."""
+    from sqlalchemy import func
+
+    from backend.database.models import Match, Season
+
+    with engine().connect() as connection:
+        first = connection.execute(
+            select(func.min(Season.start_year)).join(Match, Match.season_id == Season.id)).scalar_one()
+    if first is None:
+        raise ValueError("No matches in the database yet; import results first.")
+    return int(first) + int(cfg("training.first_test_seasons_after_start"))
+
+
+def create_run(models: list[str], first_test_season: int | None = None,
                feature_groups: dict[str, bool] | None = None) -> int:
     from backend.models.ml import ML_MODELS
 
     unknown = [m for m in models if m not in ML_MODELS]
     if unknown or not models:
         raise ValueError(f"Choose models from {', '.join(ML_MODELS)}")
+    first_test_season = first_test_season or default_first_test_season()
+    groups = feature_groups if feature_groups is not None else dict(cfg("training.default_feature_groups"))
     with engine().begin() as connection:
         return connection.execute(
             TrainingRun.__table__.insert().values(
                 models=models, status="queued",
-                args={"first_test_season": first_test_season, "feature_groups": feature_groups or {}},
+                args={"first_test_season": first_test_season, "feature_groups": groups},
             ).returning(TrainingRun.id)
         ).scalar_one()
 
@@ -245,7 +261,7 @@ def execute(run_id: int) -> None:
     if sys.platform == "win32":
         asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
     try:
-        first = int((run.args or {}).get("first_test_season", DEFAULT_FIRST_TEST_SEASON))
+        first = int((run.args or {}).get("first_test_season") or default_first_test_season())
         groups = dict((run.args or {}).get("feature_groups") or {})
         results = asyncio.run(_run_async(run_id, list(run.models), first, groups))
         _set(run_id, status="finished", finished_at=datetime.now(UTC), results=results,
@@ -308,12 +324,14 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Train the ML models (XGBoost, neural net) with live progress")
     parser.add_argument("--run-id", type=int, help="run a job created by the API")
     parser.add_argument("--models", default="xgb,nn", help="comma-separated: xgb,nn")
-    parser.add_argument("--first-test-season", type=int, default=DEFAULT_FIRST_TEST_SEASON)
-    parser.add_argument("--players", action="store_true", help="use the lineup/player features")
-    parser.add_argument("--news", action="store_true", help="use the news features")
+    parser.add_argument("--first-test-season", type=int, help="default: derived from the data (see settings)")
+    parser.add_argument("--players", action=argparse.BooleanOptionalAction, help="use the lineup/player features")
+    parser.add_argument("--news", action=argparse.BooleanOptionalAction, help="use the news features")
     args = parser.parse_args()
     run_id = args.run_id or create_run([m.strip() for m in args.models.split(",") if m.strip()],
-                                       args.first_test_season, {"players": args.players, "news": args.news})
+                                       args.first_test_season,
+                                       {**cfg("training.default_feature_groups"),
+                                        **{k: v for k, v in (("players", args.players), ("news", args.news)) if v is not None}})
     print(f"Training run #{run_id}", flush=True)
     execute(run_id)
 

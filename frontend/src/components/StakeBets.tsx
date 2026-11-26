@@ -2,13 +2,14 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Ticket } from 'lucide-react'
 import { api } from '../lib/api'
 import { Card, CardHeader, EmptyState } from './ui'
+import { refresh } from '../lib/settings'
 
 const rupees = (v: number) => `₹${v.toLocaleString('en-IN', { maximumFractionDigits: 2 })}`
 
 /** Your open bets as Stake reports them: legs, potential payout, and cash-out availability. */
 export default function StakeBets({ listLearned }: { listLearned: boolean }) {
   const queryClient = useQueryClient()
-  const bets = useQuery({ queryKey: ['stake', 'bets'], queryFn: api.stakeBets, refetchInterval: 15000 })
+  const bets = useQuery({ queryKey: ['stake', 'bets'], queryFn: api.stakeBets, refetchInterval: refresh('normal') })
   const cashout = useMutation({
     mutationFn: (id: string) => api.cashout(id),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['stake'] }),

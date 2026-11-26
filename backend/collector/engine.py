@@ -30,13 +30,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.collector.providers import PROVIDERS, Provider, check_endpoint
 from backend.core.config import ENV_FILE
+from backend.core.settings import cfg
 from backend.database.engine import AsyncSessionFactory
 from backend.database.models import AppSetting, CollectorTask, ProviderUsage, RawProviderObservation
 
 log = logging.getLogger("collector")
 SETTING_KEY = "collector"
-MAX_ATTEMPTS = 3
-FOLLOWUP_PRIORITY = 50  # per-fixture requests run after the league-level ones
 
 # In-process runtime state (the loop and the API share one process).
 RUNTIME: dict[str, dict[str, Any]] = {name: {} for name in PROVIDERS}
@@ -134,6 +133,8 @@ async def expand_followups(session: AsyncSession) -> int:
             RawProviderObservation.endpoint == "fixtures",
             RawProviderObservation.status.in_(("stored", "success")))
     )).scalars().all()
+    followup_priority = cfg("collector.followup_priority")
+    newest_season = max(cfg("collector.providers.api_football.seasons"))
     rows, seen = [], set()
     for payload in payloads:
         for fixture_id, season in finished_fixture_ids(payload):
@@ -143,7 +144,7 @@ async def expand_followups(session: AsyncSession) -> int:
             rows.append({"provider": "api_football", "kind": "fixture_players", "endpoint": "fixtures/players",
                          "params": {"fixture": int(fixture_id)},
                          "label": f"Player stats, fixture {fixture_id} ({season}/{(season + 1) % 100:02d})",
-                         "priority": FOLLOWUP_PRIORITY + max(0, 2024 - season), "status": "pending"})
+                         "priority": followup_priority + max(0, newest_season - season), "status": "pending"})
     added = 0
     for start in range(0, len(rows), 2000):
         result = await session.execute(insert(CollectorTask).values(rows[start:start + 2000])
@@ -248,7 +249,7 @@ async def run_task(session: AsyncSession, provider: Provider, task: CollectorTas
     except httpx.HTTPError as exc:
         await _count_usage(session, provider.name, True, None)
         task.error = f"Network error: {type(exc).__name__}"
-        task.status = "failed" if task.attempts >= MAX_ATTEMPTS else "pending"
+        task.status = "failed" if task.attempts >= cfg("collector.max_attempts") else "pending"
         return "retry"
     try:
         payload = response.json()
@@ -268,7 +269,7 @@ async def run_task(session: AsyncSession, provider: Provider, task: CollectorTas
         task.error = message
     else:
         task.error = message
-        task.status = "failed" if task.attempts >= MAX_ATTEMPTS else "pending"
+        task.status = "failed" if task.attempts >= cfg("collector.max_attempts") else "pending"
     return outcome
 
 
@@ -321,7 +322,7 @@ async def tick(client: httpx.AsyncClient) -> int:
                 runtime["paused_until"] = datetime.now(UTC) + timedelta(hours=1)
                 runtime["reason"] = "Key refused; check it in .env"
             elif outcome == "retry":
-                runtime["next_at"] = datetime.now(UTC) + timedelta(seconds=60)
+                runtime["next_at"] = datetime.now(UTC) + timedelta(seconds=cfg("collector.retry_after_seconds"))
     return ran
 
 

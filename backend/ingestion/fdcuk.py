@@ -24,6 +24,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.core.leagues import LEAGUES, League
+from backend.core.settings import cfg
 from backend.database.models import Match, OddsQuote
 from backend.ingestion.catalog import TeamDirectory, ensure_competitions, ensure_season
 from backend.integrations.base import ProviderRequestContext
@@ -32,8 +33,6 @@ from backend.integrations.raw import RawPayload
 
 PROVIDER = "fdcuk"
 BASE_URL = "https://www.football-data.co.uk/mmz4281"
-USER_AGENT = "SportsAnalyzer/0.1 (personal research tool)"
-REQUEST_GAP_SECONDS = 1.5  # be polite: one small file every 1.5 s
 
 STAT_COLUMNS = ("Referee", "HS", "AS", "HST", "AST", "HF", "AF", "HC", "AC", "HY", "AY", "HR", "AR")
 
@@ -305,7 +304,7 @@ async def import_fixtures(session_factory: Callable[[], AsyncSession],
     Fixtures become `scheduled` matches; the results import later fills in the score on
     the same row (matches are unique on home team, away team and date).
     """
-    async with httpx.AsyncClient(headers={"User-Agent": USER_AGENT}, follow_redirects=True,
+    async with httpx.AsyncClient(headers={"User-Agent": cfg("app.user_agent")}, follow_redirects=True,
                                  timeout=30) as client:
         response = await client.get(FIXTURES_URL)
     response.raise_for_status()
@@ -348,7 +347,7 @@ async def import_all(session_factory: Callable[[], AsyncSession], leagues: Itera
         await teams.load(session)
         await session.commit()
 
-        async with httpx.AsyncClient(headers={"User-Agent": USER_AGENT}, follow_redirects=True,
+        async with httpx.AsyncClient(headers={"User-Agent": cfg("app.user_agent")}, follow_redirects=True,
                                      timeout=30) as client:
             for league in leagues:
                 for start_year in seasons:
@@ -362,5 +361,5 @@ async def import_all(session_factory: Callable[[], AsyncSession], leagues: Itera
                         result = ImportResult(league.code, start_year, "failed", detail=f"{type(exc).__name__}: {exc}")
                     results.append(result)
                     on_result(result)
-                    await asyncio.sleep(REQUEST_GAP_SECONDS)
+                    await asyncio.sleep(cfg("ingestion.fdcuk_request_gap_seconds"))
     return results

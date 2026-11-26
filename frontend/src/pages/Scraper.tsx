@@ -4,12 +4,8 @@ import { useEffect, useRef, useState } from 'react'
 import { Guide } from '../components/Guide'
 import { Badge, Card, CardHeader, EmptyState, PageHeader, StatusDot } from '../components/ui'
 import { api, type ScrapeRun } from '../lib/api'
+import { leagues, refresh, setting } from '../lib/settings'
 
-const LEAGUES = [
-  ['ENG1', 'Premier League'], ['ENG2', 'Championship'], ['ESP1', 'La Liga'], ['ESP2', 'Segunda'],
-  ['ITA1', 'Serie A'], ['ITA2', 'Serie B'], ['GER1', 'Bundesliga'], ['GER2', '2. Bundesliga'],
-  ['FRA1', 'Ligue 1'], ['FRA2', 'Ligue 2'],
-] as const
 
 const STATUS_TONE: Record<ScrapeRun['status'], 'ok' | 'warn' | 'off' | 'bad'> = {
   queued: 'off', running: 'warn', loading: 'warn', finished: 'ok', failed: 'bad', stopped: 'off',
@@ -29,30 +25,30 @@ const input = 'rounded-lg border border-zinc-200 bg-white px-3 py-1.5 text-sm ou
 function NewRun({ disabled }: { disabled: boolean }) {
   const queryClient = useQueryClient()
   const today = new Date()
-  const [leagues, setLeagues] = useState<string[]>(['ENG1'])
+  const [chosen, setChosen] = useState<string[]>(() => leagues().slice(0, 1).map((l) => l.code))
   const [from, setFrom] = useState(iso(new Date(today.getTime() - 14 * 864e5)))
   const [to, setTo] = useState(iso(today))
   const start = useMutation({
-    mutationFn: () => api.startScrape({ spider: 'espn_matches', leagues, date_from: from, date_to: to, refetch: false }),
+    mutationFn: () => api.startScrape({ spider: 'espn_matches', leagues: chosen, date_from: from, date_to: to, refetch: false }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['scraper'] }),
   })
   const toggle = (code: string) =>
-    setLeagues((l) => (l.includes(code) ? l.filter((c) => c !== code) : [...l, code]))
+    setChosen((l) => (l.includes(code) ? l.filter((c) => c !== code) : [...l, code]))
 
   return (
     <Card>
       <CardHeader title="New scrape" aside={<span className="whitespace-nowrap text-xs text-zinc-500">ESPN · 1 request / 2 s</span>} />
       <div className="space-y-4 px-5 py-4">
         <div className="flex flex-wrap gap-1.5">
-          {LEAGUES.map(([code, name]) => (
+          {leagues().map(({ code, name }) => (
             <button key={code} onClick={() => toggle(code)}
-              className={`rounded-md border px-2.5 py-1 text-xs ${leagues.includes(code)
+              className={`rounded-md border px-2.5 py-1 text-xs ${chosen.includes(code)
                 ? 'border-zinc-900 bg-zinc-900 text-white dark:border-zinc-100 dark:bg-zinc-100 dark:text-zinc-900'
                 : 'border-zinc-200 text-zinc-600 hover:bg-zinc-50 dark:border-zinc-800 dark:text-zinc-400 dark:hover:bg-zinc-800'}`}>
               {name}
             </button>
           ))}
-          <button onClick={() => setLeagues(LEAGUES.map(([c]) => c))} className="px-2 text-xs text-zinc-500 underline-offset-2 hover:underline">all</button>
+          <button onClick={() => setChosen(leagues().map((l) => l.code))} className="px-2 text-xs text-zinc-500 underline-offset-2 hover:underline">all</button>
         </div>
         <div className="flex flex-wrap items-center gap-2 text-sm">
           <input type="date" value={from} onChange={(e) => setFrom(e.target.value)} className={input} />
@@ -60,7 +56,7 @@ function NewRun({ disabled }: { disabled: boolean }) {
           <input type="date" value={to} onChange={(e) => setTo(e.target.value)} className={input} />
           <button
             onClick={() => start.mutate()}
-            disabled={disabled || leagues.length === 0 || start.isPending}
+            disabled={disabled || chosen.length === 0 || start.isPending}
             className="ml-auto flex items-center gap-1.5 rounded-lg bg-zinc-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-zinc-700 disabled:opacity-40 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
           >
             <Play className="size-3.5" /> Start
@@ -79,7 +75,7 @@ function NewRun({ disabled }: { disabled: boolean }) {
 
 function AutoScrape() {
   const queryClient = useQueryClient()
-  const auto = useQuery({ queryKey: ['scraper', 'auto'], queryFn: api.scraperAuto, refetchInterval: 15000 })
+  const auto = useQuery({ queryKey: ['scraper', 'auto'], queryFn: api.scraperAuto, refetchInterval: refresh('normal') })
   const change = useMutation({
     mutationFn: (enabled: boolean) => api.setScraperAuto(enabled),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['scraper'] }),
@@ -91,7 +87,7 @@ function AutoScrape() {
         <div className="min-w-0">
           <div className="text-sm font-medium">Keep scraping automatically</div>
           <p className="mt-0.5 text-xs text-zinc-500 dark:text-zinc-400">
-            Finishes the 2019 to now history first, then every 6 hours fetches the last 10 days and next 14. If ESPN says
+            Collects the history from {setting<string>('scraper.history_start').slice(0, 4)} to now, newest seasons first, then every {setting<number>('scraper.recent_every_hours')} hours fetches the last {setting<number>('scraper.recent_days_back')} days and next {setting<number>('scraper.recent_days_ahead')}. If ESPN says
             "too many requests", the crawl pauses and carries on by itself.
           </p>
           {auto.data?.last_action && (
@@ -133,8 +129,8 @@ function ItemDrawer({ id, onClose }: { id: number; onClose: () => void }) {
 
 export default function Scraper() {
   const queryClient = useQueryClient()
-  const runs = useQuery({ queryKey: ['scraper', 'runs'], queryFn: api.scraperRuns, refetchInterval: 3000 })
-  const totals = useQuery({ queryKey: ['scraper', 'totals'], queryFn: api.scraperTotals, refetchInterval: 5000 })
+  const runs = useQuery({ queryKey: ['scraper', 'runs'], queryFn: api.scraperRuns, refetchInterval: refresh('live') })
+  const totals = useQuery({ queryKey: ['scraper', 'totals'], queryFn: api.scraperTotals, refetchInterval: refresh('fast') })
   const list = runs.data ?? []
   const active = list.find(isActive)
   const [selected, setSelected] = useState<number | null>(null)
@@ -149,13 +145,13 @@ export default function Scraper() {
     queryKey: ['scraper', 'items', runId, type],
     queryFn: () => api.scraperItems(runId, type),
     enabled: runId !== null,
-    refetchInterval: run && isActive(run) ? 3000 : false,
+    refetchInterval: run && isActive(run) ? refresh('live') : false,
   })
   const log = useQuery({
     queryKey: ['scraper', 'log', runId],
     queryFn: () => api.scraperLog(runId!),
     enabled: runId !== null,
-    refetchInterval: run && isActive(run) ? 3000 : false,
+    refetchInterval: run && isActive(run) ? refresh('live') : false,
   })
   const logRef = useRef<HTMLPreElement>(null)
   useEffect(() => {
@@ -183,9 +179,9 @@ export default function Scraper() {
         },
         {
           title: 'Matches with lineups',
-          body: 'How many matches have their players loaded. Player features need most of the ~20,000 matches since 2019; until then the models use team data only.',
-          verdict: (t?.matches_with_lineups ?? 0) > 15000 ? 'good' : (t?.matches_with_lineups ?? 0) > 3000 ? 'medium' : 'bad',
-          verdictLabel: (t?.matches_with_lineups ?? 0) > 15000 ? 'Enough' : 'Still filling',
+          body: 'How many matches have their players loaded. Player features need most matches since 2019; until then the models use team data only.',
+          verdict: (t?.matches_with_lineups ?? 0) > setting<number>('verdicts.lineups_enough') ? 'good' : (t?.matches_with_lineups ?? 0) > setting<number>('verdicts.lineups_some') ? 'medium' : 'bad',
+          verdictLabel: (t?.matches_with_lineups ?? 0) > setting<number>('verdicts.lineups_enough') ? 'Enough' : 'Still filling',
         },
         {
           title: 'Rate limits',

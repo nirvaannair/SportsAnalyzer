@@ -58,14 +58,11 @@ def test_strength_features_rank_teams() -> None:
 
 
 @pytest.fixture
-def small_training(monkeypatch):
-    monkeypatch.setattr(ml, "MIN_LEAGUE_ROWS", 100)
-    monkeypatch.setattr(ml, "MIN_TRAIN_ROWS", 100)
-    monkeypatch.setattr(ml, "XGB_ROUNDS", 60)
-    monkeypatch.setattr(ml, "XGB_TUNE_ROUNDS", 20)
-    monkeypatch.setattr(ml, "NN_EPOCHS", 4)
-    monkeypatch.setattr(ml, "NN_TUNE_EPOCHS", 2)
-    monkeypatch.setattr(ml, "WARMUP_DAYS", 30)
+def small_training(settings_override):
+    settings_override({"training": {
+        "min_league_rows": 100, "min_train_rows": 100, "warmup_days": 30,
+        "xgb": {"rounds": 60, "tune_rounds": 20}, "nn": {"epochs": 4, "tune_epochs": 2},
+    }})
 
 
 @pytest.mark.parametrize("family", ["xgb", "nn"])

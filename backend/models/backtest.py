@@ -11,12 +11,12 @@ from collections.abc import Callable
 import numpy as np
 import pandas as pd
 
+from backend.core.settings import cfg
 from backend.models.data import assert_odds_free
 from backend.models.dixon_coles import DixonColesModel, DixonColesParams
 from backend.models.elo import EloOutcomeModel, pre_match_ratings
 
 MODELS = ("elo", "dixon_coles", "blend")
-ELO_WARMUP_DAYS = 365  # Elo ratings need a season to settle before their outcomes are used to fit
 
 
 def _elo_predictions(matches: pd.DataFrame, cutoffs: list[pd.Timestamp]) -> pd.DataFrame:
@@ -24,7 +24,7 @@ def _elo_predictions(matches: pd.DataFrame, cutoffs: list[pd.Timestamp]) -> pd.D
     ratings = matches[["match_id", "date", "status", "home_goals", "away_goals"]].merge(
         pre_match_ratings(matches), on="match_id"
     )
-    first_day = matches["date"].min() + pd.Timedelta(days=ELO_WARMUP_DAYS)
+    first_day = matches["date"].min() + pd.Timedelta(days=cfg("elo.warmup_days"))
     parts = []
     for start, end in zip(cutoffs, cutoffs[1:] + [pd.Timestamp.max], strict=True):
         target = ratings[(ratings["date"] >= start) & (ratings["date"] < end)]

@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { Guide, type GuideItem } from '../components/Guide'
 import { Badge, Card, CardHeader, EmptyState, PageHeader } from '../components/ui'
 import { api, type ModelSummary } from '../lib/api'
+import { setting } from '../lib/settings'
 
 const LABEL: Record<string, string> = {
   elo: 'Elo', dixon_coles: 'Dixon-Coles', blend: 'Blend (Elo + Dixon-Coles)',
@@ -117,15 +118,15 @@ function ModelsGuide({ list, current }: { list: ModelSummary[]; current?: ModelS
       body: gap === undefined ? '' : gap < 0
         ? "It beats the bookmakers' closing prices: a real edge."
         : `It is ${gap.toFixed(4)} behind the bookmakers. Good enough to learn from, not yet to bet real money with.`,
-      verdict: gap === undefined ? 'info' : gap < 0 ? 'good' : gap < 0.008 ? 'medium' : 'bad',
+      verdict: gap === undefined ? 'info' : gap < 0 ? 'good' : gap < setting<number>('verdicts.market_gap_medium') ? 'medium' : 'bad',
       verdictLabel: gap === undefined ? undefined : gap < 0 ? 'Beating market' : 'Behind market',
     },
     {
       title: 'Calibration chart',
       body: <>When the model says 40%, does it happen about 40% of the time? Dots on the dashed line = honest probabilities, which value
         betting depends on.{calErr !== undefined && ` The selected model is off by ${(calErr * 100).toFixed(1)} percentage points on average.`}</>,
-      verdict: calErr === undefined ? 'info' : calErr < 0.015 ? 'good' : calErr < 0.03 ? 'medium' : 'bad',
-      verdictLabel: calErr === undefined ? undefined : calErr < 0.015 ? 'Well calibrated' : undefined,
+      verdict: calErr === undefined ? 'info' : calErr < setting<number>('verdicts.calibration_good') ? 'good' : calErr < setting<number>('verdicts.calibration_medium') ? 'medium' : 'bad',
+      verdictLabel: calErr === undefined ? undefined : calErr < setting<number>('verdicts.calibration_good') ? 'Well calibrated' : undefined,
     },
     {
       title: 'By season',
@@ -136,8 +137,8 @@ function ModelsGuide({ list, current }: { list: ModelSummary[]; current?: ModelS
       title: 'Simulated flat bets',
       body: <>What would have happened betting 1 unit whenever the model saw an edge, at the bookmakers' prices. ROI above 0 = profit.
         {bestRoi !== undefined && ` Best setting for the selected model: ${bestRoi > 0 ? '+' : ''}${(bestRoi * 100).toFixed(1)}%.`}</>,
-      verdict: bestRoi === undefined ? 'info' : bestRoi > 0.02 ? 'good' : bestRoi > -0.03 ? 'medium' : 'bad',
-      verdictLabel: bestRoi === undefined ? undefined : bestRoi > 0.02 ? 'Profitable' : bestRoi > -0.03 ? 'Break-even-ish' : 'Losing',
+      verdict: bestRoi === undefined ? 'info' : bestRoi > setting<number>('verdicts.roi_good') ? 'good' : bestRoi > setting<number>('verdicts.roi_medium') ? 'medium' : 'bad',
+      verdictLabel: bestRoi === undefined ? undefined : bestRoi > setting<number>('verdicts.roi_good') ? 'Profitable' : bestRoi > setting<number>('verdicts.roi_medium') ? 'Break-even-ish' : 'Losing',
     },
   ]
   return <Guide items={items} />
