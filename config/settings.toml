@@ -468,3 +468,15 @@ normal = 15
 slow = 30
 minute = 60
 training_live = 1.5
+
+# ---------------------------------------------------------------------------------------------
+# One-click start (start.ps1 / stop.ps1)
+# ---------------------------------------------------------------------------------------------
+[startup]
+docker_wait_seconds = 240       # how long to wait for Docker Desktop to start
+services_wait_seconds = 120     # how long to wait for the API and dashboard to answer
+poll_seconds = 2                # how often to check while waiting
+dashboard_retries = 1           # start the dashboard again (in a visible window) if it doesn't answer
+close_after_seconds = 6         # keep the start-up window open this long at the end
+api_port = 8000
+dashboard_port = 5173

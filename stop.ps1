@@ -1,11 +1,14 @@
 # Stop the SportsAnalyzer API and dashboard (and any scrape/training they started).
 # The database keeps running in Docker; add -Database to stop it too.
+# Ports come from [startup] in config/settings.toml.
 param([switch]$Database)
 
 $root = $PSScriptRoot
 Set-Location $root
+$python = Join-Path $root '.venv\Scripts\python.exe'
+$s = (& $python -c "import json; from backend.core.settings import cfg; print(json.dumps(cfg('startup')))") | ConvertFrom-Json
 
-foreach ($port in 8000, 5173) {
+foreach ($port in $s.api_port, $s.dashboard_port) {
     $owners = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue |
         Select-Object -ExpandProperty OwningProcess -Unique
     foreach ($id in $owners) {
@@ -23,4 +26,4 @@ if ($Database) {
     Write-Host "Stopped the database"
 }
 Write-Host "Done. A running scrape resumes by itself next time (pages are cached)."
-Start-Sleep -Seconds 3
+Start-Sleep -Seconds $s.poll_seconds
