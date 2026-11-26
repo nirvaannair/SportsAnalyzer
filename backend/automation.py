@@ -2,6 +2,7 @@
 
 Every 15 minutes: settle finished bets, apply drawdown stops, let enabled strategies place bets.
 Every 6 hours (and at start-up): refresh upcoming fixtures and re-predict them.
+Every 15 minutes: keep the ESPN scraper going (backend/scraping/auto.py), if its switch is on.
 
 Nothing here can send a real bet by itself: real orders only go out through the Stake
 helper while Execution is ON on the Stake page, and within the .env caps.
@@ -53,6 +54,15 @@ async def strategy_cycle() -> dict[str, Any]:
     return report
 
 
+async def scraper_cycle() -> dict[str, Any]:
+    from backend.scraping.auto import cycle
+
+    async with AsyncSessionFactory() as session:
+        report = await cycle(session)
+        await session.commit()
+    return report
+
+
 async def loop() -> None:
     state: dict[str, Any] = {"started_at": datetime.now(UTC).isoformat()}
     last_refresh: datetime | None = None
@@ -64,6 +74,11 @@ async def loop() -> None:
                 state["last_refresh"] = {"at": now.isoformat(), **(await refresh_fixtures_and_predictions())}
                 last_refresh = now
             state["last_cycle"] = {"at": datetime.now(UTC).isoformat(), **(await strategy_cycle())}
+            try:
+                state["last_cycle"].update(await scraper_cycle())
+            except Exception as exc:  # the scraper must never stop betting automation
+                log.exception("scraper cycle failed")
+                state["last_cycle"]["scraper"] = f"error: {type(exc).__name__}: {exc}"
             state["last_error"] = None
         except Exception as exc:  # keep the loop alive; show the problem on the dashboard
             log.exception("automation cycle failed")

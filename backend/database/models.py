@@ -335,6 +335,46 @@ class Prediction(Base):
     )
 
 
+class NewsArticle(Base):
+    """A football news article (headline + summary), collected by the news spider."""
+
+    __tablename__ = "news_articles"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    provider: Mapped[str] = mapped_column(String(40), nullable=False)
+    external_id: Mapped[str] = mapped_column(String(80), nullable=False)
+    league: Mapped[str | None] = mapped_column(String(8))
+    published_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    headline: Mapped[str] = mapped_column(Text, nullable=False)
+    summary: Mapped[str | None] = mapped_column(Text)
+    url: Mapped[str | None] = mapped_column(Text)
+    topics: Mapped[list[str]] = mapped_column(JSONB, nullable=False, server_default="[]")
+    sentiment: Mapped[float] = mapped_column(Float, nullable=False)  # -1 bad news .. +1 good news
+    injury: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    signals: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default="{}")
+
+    __table_args__ = (
+        UniqueConstraint("provider", "external_id", name="uq_news_articles_provider_id"),
+        Index("ix_news_articles_published", "published_at"),
+    )
+
+
+class NewsMention(Base):
+    """A team (and optionally a player) an article is about."""
+
+    __tablename__ = "news_mentions"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    article_id: Mapped[int] = mapped_column(ForeignKey("news_articles.id", ondelete="CASCADE"), nullable=False)
+    team_id: Mapped[int | None] = mapped_column(ForeignKey("teams.id"))
+    player_id: Mapped[int | None] = mapped_column(ForeignKey("players.id"))
+    provider_team_id: Mapped[str | None] = mapped_column(String(40))
+    label: Mapped[str] = mapped_column(String(160), nullable=False)
+    weight: Mapped[float] = mapped_column(Float, nullable=False)  # 1 when the article is about one team
+
+    __table_args__ = (Index("ix_news_mentions_team", "team_id", "article_id"),)
+
+
 class CollectorTask(Base):
     """One request the background collector will make (or made) to a free API provider."""
 

@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Bug, Play, Square, X } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
+import { Guide } from '../components/Guide'
 import { Badge, Card, CardHeader, EmptyState, PageHeader, StatusDot } from '../components/ui'
 import { api, type ScrapeRun } from '../lib/api'
 
@@ -76,6 +77,39 @@ function NewRun({ disabled }: { disabled: boolean }) {
   )
 }
 
+function AutoScrape() {
+  const queryClient = useQueryClient()
+  const auto = useQuery({ queryKey: ['scraper', 'auto'], queryFn: api.scraperAuto, refetchInterval: 15000 })
+  const change = useMutation({
+    mutationFn: (enabled: boolean) => api.setScraperAuto(enabled),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['scraper'] }),
+  })
+  const on = Boolean(auto.data?.enabled)
+  return (
+    <Card>
+      <div className="flex items-center justify-between gap-4 px-5 py-4">
+        <div className="min-w-0">
+          <div className="text-sm font-medium">Keep scraping automatically</div>
+          <p className="mt-0.5 text-xs text-zinc-500 dark:text-zinc-400">
+            Finishes the 2019 to now history first, then every 6 hours fetches the last 10 days and next 14. If ESPN says
+            "too many requests", the crawl pauses and carries on by itself.
+          </p>
+          {auto.data?.last_action && (
+            <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
+              Last: {auto.data.last_action.action} · {new Date(auto.data.last_action.at).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' })}
+            </p>
+          )}
+        </div>
+        <button role="switch" aria-checked={on} aria-label="Keep scraping automatically" disabled={!auto.data || change.isPending}
+          onClick={() => change.mutate(!on)}
+          className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors disabled:opacity-40 ${on ? 'bg-emerald-500' : 'bg-zinc-300 dark:bg-zinc-700'}`}>
+          <span className={`inline-block size-4 rounded-full bg-white shadow transition-transform ${on ? 'translate-x-4.5' : 'translate-x-0.5'}`} />
+        </button>
+      </div>
+    </Card>
+  )
+}
+
 function ItemDrawer({ id, onClose }: { id: number; onClose: () => void }) {
   const item = useQuery({ queryKey: ['scraper', 'item', id], queryFn: () => api.scraperItem(id) })
   return (
@@ -141,6 +175,30 @@ export default function Scraper() {
         actions={active ? <Badge tone="warn">Run #{active.id} {active.status}</Badge> : <Badge>Idle</Badge>}
       />
 
+      <Guide items={[
+        {
+          title: 'What the scraper does',
+          body: 'Scrapy (an open-source scraping tool) reads ESPN match pages: starting XIs, substitutions with minutes, goals, cards and player stats. This is what the player features are built from.',
+          verdict: active ? 'good' : 'medium', verdictLabel: active ? 'Collecting' : 'Idle',
+        },
+        {
+          title: 'Matches with lineups',
+          body: 'How many matches have their players loaded. Player features need most of the ~20,000 matches since 2019; until then the models use team data only.',
+          verdict: (t?.matches_with_lineups ?? 0) > 15000 ? 'good' : (t?.matches_with_lineups ?? 0) > 3000 ? 'medium' : 'bad',
+          verdictLabel: (t?.matches_with_lineups ?? 0) > 15000 ? 'Enough' : 'Still filling',
+        },
+        {
+          title: 'Rate limits',
+          body: 'It asks for one page every 2 seconds. If ESPN says "too many requests", the crawl pauses (1 minute, then longer) and continues by itself. Pages are cached, so a restart never downloads twice.',
+          verdict: 'info',
+        },
+        {
+          title: 'Runs, log and items',
+          body: 'Each run is one crawl. The log shows what it is doing right now; items are everything it saved. Click an item to see the raw data.',
+          verdict: 'info',
+        },
+      ]} />
+
       <div className="mb-6 grid grid-cols-2 gap-4 lg:grid-cols-4">
         {[
           ['Matches listed', t?.items_by_type.fixture],
@@ -157,6 +215,7 @@ export default function Scraper() {
 
       <div className="grid gap-6 lg:grid-cols-5">
         <div className="space-y-6 lg:col-span-2">
+          <AutoScrape />
           <NewRun disabled={Boolean(active)} />
           <Card>
             <CardHeader title="Runs" />

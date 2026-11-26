@@ -33,6 +33,13 @@ def months_between(start: date, end: date) -> Iterator[str]:
         year, month = (year + 1, 1) if month == 12 else (year, month + 1)
 
 
+def recency_priority(day: str) -> int:
+    """Scrapy runs higher priorities first: newer months/matches get higher numbers,
+    so the most recent seasons are collected before older ones."""
+    digits = day.replace("-", "")[:6]  # YYYYMM
+    return (int(digits[:4]) - 2000) * 12 + int(digits[4:6])
+
+
 class EspnMatchesSpider(scrapy.Spider):
     name = "espn_matches"
     custom_settings = {"DOWNLOAD_DELAY": 2.0}
@@ -58,9 +65,11 @@ class EspnMatchesSpider(scrapy.Spider):
         self.logger.info("Leagues %s, %s to %s, %d matches already have details",
                          ",".join(lg.code for lg in self.leagues), self.date_from, self.date_to,
                          len(self.already_scraped))
-        for league in self.leagues:
-            for month in months_between(self.date_from, self.date_to):
-                yield scrapy.Request(espn_parse.scoreboard_url(league, month),
+        # Newest months first (and higher priority), across all leagues.
+        months = sorted(months_between(self.date_from, self.date_to), reverse=True)
+        for month in months:
+            for league in self.leagues:
+                yield scrapy.Request(espn_parse.scoreboard_url(league, month), priority=recency_priority(month),
                                      callback=self.parse_scoreboard, cb_kwargs={"league": league})
 
     def parse_scoreboard(self, response, league: League):
@@ -72,6 +81,7 @@ class EspnMatchesSpider(scrapy.Spider):
             if fixture["completed"] and fixture["event_id"] not in self.already_scraped:
                 yield scrapy.Request(
                     espn_parse.summary_url(league, fixture["event_id"]),
+                    priority=recency_priority(fixture["date"]) + 1,  # finish a month's matches before older months
                     callback=self.parse_summary,
                     cb_kwargs={"league": league, "fixture": fixture},
                 )

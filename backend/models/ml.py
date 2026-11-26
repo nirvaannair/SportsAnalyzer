@@ -487,6 +487,15 @@ def save_league_choice(folder: Path, choice: dict[str, str]) -> None:
     _merge_meta(folder, {"league_choice": choice})
 
 
+def save_feature_groups(folder: Path, groups: dict[str, bool]) -> None:
+    _merge_meta(folder, {"feature_groups": groups})
+
+
+def load_feature_groups(folder: Path) -> dict[str, bool]:
+    path = folder / "meta.json"
+    return json.loads(path.read_text()).get("feature_groups", {}) if path.exists() else {}
+
+
 def load_league_choice(folder: Path) -> dict[str, str]:
     path = folder / "meta.json"
     return json.loads(path.read_text()).get("league_choice", {}) if path.exists() else {}

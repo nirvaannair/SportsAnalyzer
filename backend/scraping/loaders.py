@@ -109,6 +109,13 @@ async def _player_ids(session: AsyncSession, players: dict[str, tuple[str, str |
     return known
 
 
+def _played(row: dict[str, Any]) -> tuple[int, int]:
+    """Sort key: (played at all, minutes on the pitch)."""
+    if row["minute_on"] is None:
+        return (0, 0)
+    return (1, (row["minute_off"] or 90) - row["minute_on"])
+
+
 def _on_off(p: dict[str, Any], end_minute: int) -> tuple[int | None, int | None]:
     if p["starter"]:
         on = 0
@@ -156,13 +163,19 @@ async def load_match_details(session: AsyncSession, limit: int = 5000) -> dict[s
         player_ids = await _player_ids(session, players)
         end_minute = max([90] + [e["minute"] for e in d["events"] if e["minute"] is not None])
 
-        rows = []
+        by_player: dict[int, dict] = {}
         for team in d["teams"]:
             for p in team["players"]:
                 on, off = _on_off(p, end_minute)
-                rows.append({"match_id": match_id, "team_id": teams[team["id"]], "player_id": player_ids[p["id"]],
-                             "started": p["starter"], "minute_on": on, "minute_off": off,
-                             "position": p["position"], "stats": p["stats"]})
+                row = {"match_id": match_id, "team_id": teams[team["id"]], "player_id": player_ids[p["id"]],
+                       "started": p["starter"], "minute_on": on, "minute_off": off,
+                       "position": p["position"], "stats": p["stats"]}
+                # ESPN sometimes lists a player twice in one match (e.g. once as starter, once in the
+                # unused-subs list). Keep the entry that actually played the most.
+                previous = by_player.get(row["player_id"])
+                if previous is None or _played(row) > _played(previous):
+                    by_player[row["player_id"]] = row
+        rows = list(by_player.values())
         if rows:
             statement = insert(MatchPlayer).values(rows)
             await session.execute(statement.on_conflict_do_update(

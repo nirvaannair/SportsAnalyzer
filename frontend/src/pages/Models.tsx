@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { Brain, ShieldCheck } from 'lucide-react'
 import { useState } from 'react'
+import { Guide, type GuideItem } from '../components/Guide'
 import { Badge, Card, CardHeader, EmptyState, PageHeader } from '../components/ui'
 import { api, type ModelSummary } from '../lib/api'
 
@@ -94,6 +95,54 @@ function Row({ label, sub, s, ou, btts, n, muted }: {
   )
 }
 
+function ModelsGuide({ list, current }: { list: ModelSummary[]; current?: ModelSummary }) {
+  const ref = list[0]?.metrics
+  const market = ref?.market_reference_1x2?.logloss
+  const best = [...list].sort((a, b) => a.metrics['1x2'].logloss - b.metrics['1x2'].logloss)[0]
+  const gap = best && market !== undefined ? best.metrics['1x2'].logloss - market : undefined
+  const cal = current?.metrics.calibration_1x2 ?? []
+  const calErr = cal.length
+    ? cal.reduce((t, b) => t + Math.abs(b.predicted - b.observed) * b.count, 0) / cal.reduce((t, b) => t + b.count, 0)
+    : undefined
+  const bets = current?.metrics.simulated_bets ?? []
+  const bestRoi = bets.length ? Math.max(...bets.map((b) => b.roi)) : undefined
+  const items: GuideItem[] = [
+    {
+      title: 'The accuracy table',
+      body: "Every model is scored on the same matches it had never seen. Log loss and RPS: lower is better. 'Always predict the average' is the floor any model must beat; the bookmakers' closing prices are the target.",
+      verdict: 'info',
+    },
+    {
+      title: `Best model: ${best ? LABEL[best.model] ?? best.model : '…'}`,
+      body: gap === undefined ? '' : gap < 0
+        ? "It beats the bookmakers' closing prices: a real edge."
+        : `It is ${gap.toFixed(4)} behind the bookmakers. Good enough to learn from, not yet to bet real money with.`,
+      verdict: gap === undefined ? 'info' : gap < 0 ? 'good' : gap < 0.008 ? 'medium' : 'bad',
+      verdictLabel: gap === undefined ? undefined : gap < 0 ? 'Beating market' : 'Behind market',
+    },
+    {
+      title: 'Calibration chart',
+      body: <>When the model says 40%, does it happen about 40% of the time? Dots on the dashed line = honest probabilities, which value
+        betting depends on.{calErr !== undefined && ` The selected model is off by ${(calErr * 100).toFixed(1)} percentage points on average.`}</>,
+      verdict: calErr === undefined ? 'info' : calErr < 0.015 ? 'good' : calErr < 0.03 ? 'medium' : 'bad',
+      verdictLabel: calErr === undefined ? undefined : calErr < 0.015 ? 'Well calibrated' : undefined,
+    },
+    {
+      title: 'By season',
+      body: 'The same score split by season. Steady numbers mean the model is not just lucky in one year; a sudden jump means something changed (rules, data gaps).',
+      verdict: 'info',
+    },
+    {
+      title: 'Simulated flat bets',
+      body: <>What would have happened betting 1 unit whenever the model saw an edge, at the bookmakers' prices. ROI above 0 = profit.
+        {bestRoi !== undefined && ` Best setting for the selected model: ${bestRoi > 0 ? '+' : ''}${(bestRoi * 100).toFixed(1)}%.`}</>,
+      verdict: bestRoi === undefined ? 'info' : bestRoi > 0.02 ? 'good' : bestRoi > -0.03 ? 'medium' : 'bad',
+      verdictLabel: bestRoi === undefined ? undefined : bestRoi > 0.02 ? 'Profitable' : bestRoi > -0.03 ? 'Break-even-ish' : 'Losing',
+    },
+  ]
+  return <Guide items={items} />
+}
+
 export default function Models() {
   const models = useQuery({ queryKey: ['models'], queryFn: api.models })
   const list = models.data ?? []
@@ -120,6 +169,7 @@ export default function Models() {
         description="Every number here is a walk-forward backtest: each week the models only knew results from before that week."
         actions={<Badge tone="accent"><ShieldCheck className="mr-1 size-3.5" /> Odds-free models</Badge>}
       />
+      <ModelsGuide list={list} current={current} />
 
       <Card>
         <CardHeader title="How accurate are the predictions?" aside={<span className="text-xs text-zinc-500">Lower log loss and RPS = better</span>} />

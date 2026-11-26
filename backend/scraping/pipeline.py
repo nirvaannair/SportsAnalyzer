@@ -93,6 +93,7 @@ class RunStatsExtension:
             "items": raw.get("item_scraped_count", 0),
             "items_by_type": {k.split("/")[-1]: v for k, v in raw.items() if k.startswith("sa/items/")},
             "errors": raw.get("log_count/ERROR", 0),
+            "rate_limit_waits": raw.get("rate_limit_waits", 0),
             "http_errors": {k.split("/")[-1]: v for k, v in raw.items()
                             if k.startswith("downloader/response_status_count/") and not k.endswith("/200")},
             "finish_reason": reason,

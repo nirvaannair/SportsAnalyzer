@@ -6,6 +6,37 @@ A personal, locally run football analytics and betting system. It pulls in data 
 
 ---
 
+## Easy guide: turning SportsAnalyzer on and off
+
+**One click (after the one-time setup below):** double-click **SportsAnalyzer** on your desktop
+(or `Start SportsAnalyzer.cmd` in this folder). It:
+1. starts **Docker Desktop** if it isn't running (Docker runs the database);
+2. starts the **database** and applies any database updates;
+3. starts the **API server** in a minimised window called *SportsAnalyzer API*;
+4. starts the **dashboard** in a minimised window called *SportsAnalyzer dashboard*;
+5. opens **http://localhost:5173** in your browser.
+Anything already running is left alone, so it is safe to click twice. To stop: **Stop SportsAnalyzer** on the
+desktop (or `Stop SportsAnalyzer.cmd`). The database keeps running in Docker; that's fine.
+
+**What each piece is**
+| Piece | What it does | If it's off |
+|---|---|---|
+| Docker Desktop + database | Stores every match, player, prediction and bet | Everything shows "Database offline" |
+| **API server** (port 8000) | The engine behind the dashboard. It answers the dashboard's questions and runs the background jobs: settling bets and running strategies every 15 min, re-predicting matches every 6 h, the free-API collector, the always-on scraper, and training runs | The dashboard shows "API offline" and nothing updates |
+| Dashboard (port 5173) | The website you look at | The page doesn't load |
+| Chrome + Stake Helper extension + logged-in stake.com tab | Reads your Stake balance/bets and places approved bets | "Stake helper offline"; no bets can be placed (everything else works) |
+
+**One-time setup on a new computer** (already done on this laptop): install Docker Desktop, Python 3.12 and Node.js;
+then in this folder: `copy .env.example .env` (fill in keys), `python -m venv .venv`,
+`.venv\Scripts\python -m pip install -e ".[dev]" xgboost`,
+`.venv\Scripts\python -m pip install torch==2.15.0+cu132 --index-url https://download.pytorch.org/whl/cu132`,
+`npm --prefix frontend install`, and once: `powershell -ExecutionPolicy Bypass -File scripts\create-desktop-shortcut.ps1`.
+
+**Updating to the newest version:** after a pull request is merged on GitHub, open PowerShell in this folder and run
+`git pull`, then click Stop and Start.
+
+---
+
 ## Project handover (last updated 2026-11-26)
 
 ### What the owner wants (condensed)
@@ -124,8 +155,53 @@ Parsing: API-Football fixture lists are parsed straight away (teams and fixtures
 queued). Other responses wait in the raw store; their parsers (player stats → `match_players`, injuries → availability
 features, OpenLigaDB goal minutes, football-data.org CL matches) are part of the player-layer step below.
 
+### Player layer (started 2026-11-26)
+- `backend/models/players.py`: per-player **with/without impact** = team goal difference per 90 with the player on the
+  pitch minus off it, shrunk to 0 until ~8 matches of minutes each way, older matches fading (half-life 1 year).
+  Point-in-time lineup features for every match: starting-XI impact, starters' recent minutes, number of regulars (11
+  most-used in the last 6 matches) not starting, and their impact. Upcoming matches use the expected XI (the regulars).
+  Own goals are credited from the final score. Tested in `tests/test_players.py`.
+- These 8 features are part of `FEATURE_COLUMNS`, so every training run uses them (NaN where no lineups yet).
+- **Players page**: players by impact (filter by league, search), team squads and a **best XI** (4-3-3, 270+ minutes).
+  API: `/api/players`, `/api/players/teams`, `/api/players/teams/{id}`.
+- Fixed 2026-11-26: the ESPN loader crashed when a player appears twice in one match (it stopped every load at that
+  match, leaving ~4,000 scraped matches unloaded); it now keeps the entry with the most minutes.
+- Squads/best XI only count **current** players: played for that club within ~5 months of its latest match we hold
+  (so De Bruyne leaves Man City's squad; he reappears at Napoli once Serie A lineups load).
+- **First test (run #3, England only had lineups, ~16% of matches): player features did NOT help** (Premier League
+  XGBoost 0.9810 → 0.9825; NN worse). So player and news features are **switches per training run** (Training page,
+  "Extra inputs"; off = blanked, as if never seen; saved with each model so live predictions match). Live models were
+  retrained with both off (run #4). Re-test with players on once all 10 leagues have lineups.
+- Still to do: transfer what-ifs, player vs opponent style, 3D style maps, injuries (API-Football collector feeds them).
+
+### News and team form (built 2026-11-26)
+- **Scrapy spider `espn_news`** (`backend/scraping/spiders/espn_news.py`): ESPN's public news JSON, 1 request per league,
+  **every hour** automatically (runs alongside the match scraper). Articles carry ESPN team/player IDs, so they link to
+  our teams through the existing ESPN mappings (`backend/scraping/news_loader.py` → `news_articles`, `news_mentions`).
+- **Reading the articles** (`backend/scraping/news_analysis.py`): transparent football word list; sentiment −1..+1
+  (headline counts double; betting talk stripped), injury flag, manager/form/transfer flags. First run: 475 articles,
+  768 team links.
+- **News features** (7 days before kickoff, strictly before match day): news volume, average sentiment, injury
+  stories, per side. Switch "News features" on in a training run once a few weeks of hourly news exist (ESPN's feed
+  has no deep archive, so history builds up from now).
+- **Team news page**: 7-day team mood (positive/mixed/negative), latest scored headlines with team tags and injury
+  badges, filter by league/team/injuries.
+
+### Always on, and waiting out rate limits (2026-11-26)
+- **Scraper**: `backend/scraping/auto.py`, called by the automation loop every 15 min (switch on the Scraper page, on by
+  default): resumes the 2019→now backfill until it finishes, then every 6 h scrapes the last 10 days and next 14.
+- **Rate limits**: `backend/scraping/middleware.py` pauses the whole crawl on HTTP 429/503 (Retry-After, else 1 min
+  doubling to 15 min) and retries the same page. The collector pauses a provider until the next UTC day when its quota
+  is used and backs off 60 s on 429. Bets are capped separately (.env).
+
+### Plain-English guide on every page (2026-11-26)
+`frontend/src/components/Guide.tsx`: on screens 1536 px and wider a side column, otherwise a fold-out box, explaining each
+table in plain words with a live Good / Medium / Needs-work verdict (e.g. "Behind market", "Improved", "Still filling").
+
 ### Next steps (in order)
-1. First real cash-out through the dashboard (owner's click) and first strategy multi in approve mode, to confirm end to end.
+1. After 2–4 weeks of hourly news and once all leagues have lineups: train with player and/or news features on and
+   compare with run #4 on the Models/Training pages; keep whatever lowers log loss.
+2. First real cash-out through the dashboard (owner's click) and first strategy multi in approve mode, to confirm end to end.
 2. Compare the ML models with Elo/Dixon-Coles and the market on the Models page; tune them (hyper-parameter search,
    calibration layer) and paper-trade the best one.
 3. **Cross-league strength:** add European competitions and domestic cups to the ESPN spider; **one global model
@@ -143,13 +219,14 @@ features, OpenLigaDB goal minutes, football-data.org CL matches) are part of the
 Python 3.12 (`.venv`), FastAPI + uvicorn, SQLAlchemy 2 (async with asyncpg; psycopg for Scrapy), Alembic, PostgreSQL 17 in Docker, pandas/numpy/scipy/scikit-learn, **XGBoost 3.4 (CUDA) and PyTorch 2.15 (CUDA 13.2)**, Scrapy, httpx/aiohttp; React 19 + Vite + TypeScript + Tailwind v4 + TanStack Query + lucide icons; a Chrome MV3 extension; pytest + ruff. GitHub: `nirvaannair/SportsAnalyzer` (work happens on branch `claude/football-betting-ml-analyzer-e7dd8d` and is merged through PRs; `gh` is at `C:\Program Files\GitHub CLI\gh.exe`, not on PATH).
 
 ### Day-to-day: what must be running
+`Start SportsAnalyzer.cmd` (desktop shortcut **SportsAnalyzer**) does steps 1–3; see the Easy guide at the top. By hand:
 1. **Docker Desktop** (database container `sportsanalyzer-db`).
 2. **API:** `.\.venv\Scripts\uvicorn.exe backend.api.main:app --reload --port 8000`
 3. **Dashboard:** `npm --prefix frontend run dev`, then open http://localhost:5173
 4. For Stake: Chrome with the **SportsAnalyzer Stake Helper** extension loaded from `extension/` and a logged-in stake.com tab.
 
 ### Dashboard pages
-Training (start/stop runs, live loss curve per season fold, global-vs-league table, backtest scores) · Data sources (collector switches, budgets, quota meters, queue) · Overview (top row: live Stake balance, money on Stake now with payout if all win, bets sent by the system today versus caps, strategies on; System card: helper, execution, learned requests, automation, predictions, scraper; In-play payout card; strategy controls: on/off, paper/approve/auto, reinvest %, settings incl. confidence band and multi legs) · Bet ledger · Matches (model probabilities vs prices) · Stake (helper, balance, switches, learned requests, approvals, Your Stake bets + cash-out, outcomes) · Models (backtest metrics, calibration, simulated bets) · Data sources · Scraper (runs, live log, items) · Identity review. Pages marked P2–P4 in the sidebar are not built yet.
+Players (impact ratings, squads, best XI) · Team news (7-day mood, scored headlines, injuries) · Training (start/stop runs, live loss curve per season fold, global-vs-league table, backtest scores) · Data sources (collector switches, budgets, quota meters, queue) · Overview (top row: live Stake balance, money on Stake now with payout if all win, bets sent by the system today versus caps, strategies on; System card: helper, execution, learned requests, automation, predictions, scraper; In-play payout card; strategy controls: on/off, paper/approve/auto, reinvest %, settings incl. confidence band and multi legs) · Bet ledger · Matches (model probabilities vs prices) · Stake (helper, balance, switches, learned requests, approvals, Your Stake bets + cash-out, outcomes) · Models (backtest metrics, calibration, simulated bets) · Data sources · Scraper (runs, live log, items) · Identity review. Pages marked P2–P4 in the sidebar are not built yet.
 
 ---
 

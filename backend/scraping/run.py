@@ -23,7 +23,8 @@ from backend.database.models import ScrapeRun
 from backend.scraping.db import engine
 from backend.scraping.settings import SCRAPE_DATA_DIR, SETTINGS
 
-SPIDERS = {"espn_matches": "backend.scraping.spiders.espn_matches.EspnMatchesSpider"}
+SPIDERS = {"espn_matches": "backend.scraping.spiders.espn_matches.EspnMatchesSpider",
+           "espn_news": "backend.scraping.spiders.espn_news.EspnNewsSpider"}
 LOG_DIR = SCRAPE_DATA_DIR / "logs"
 
 
@@ -99,10 +100,12 @@ def _crawl(run_id: int, spider: str, args: dict[str, str]) -> None:
 async def _load(spider: str) -> dict[str, Any]:
     from backend.database.engine import AsyncSessionFactory, dispose_database_engine
     from backend.scraping.loaders import load_espn
+    from backend.scraping.news_loader import load_news
 
     try:
         async with AsyncSessionFactory() as session:
-            result = await load_espn(session) if spider == "espn_matches" else {}
+            loaders = {"espn_matches": load_espn, "espn_news": load_news}
+            result = await loaders[spider](session) if spider in loaders else {}
             await session.commit()
         return result
     finally:

@@ -1,4 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
+import { Guide } from '../components/Guide'
 import InPlay from '../components/InPlay'
 import StrategyControls from '../components/StrategyControls'
 import { Badge, Card, CardHeader, PageHeader, Stat, StatusDot } from '../components/ui'
@@ -8,7 +9,7 @@ const ROADMAP = [
   { phase: 0, title: 'Foundations', detail: 'Project setup, Docker Postgres, tests, API and dashboard', done: true },
   { phase: 1, title: 'Data', detail: 'Results, stats and fixtures for 10 leagues; team identity matching; ESPN scraper', done: true },
   { phase: 2, title: 'Players & news', detail: 'Player pages, impact with/without, best XI, injuries' },
-  { phase: 3, title: 'Models', detail: 'Elo + Dixon-Coles done; GPU-trained ML models next' },
+  { phase: 3, title: 'Models', detail: 'Elo, Dixon-Coles, GPU-trained XGBoost + neural net (global and per league); player features next' },
   { phase: 4, title: 'Strategies', detail: 'Staking, compounding, value bands, multis, ledger', done: true },
   { phase: 5, title: 'Dashboard', detail: 'Every page filled with live data' },
   { phase: 6, title: 'Stake', detail: 'Helper connected; ₹1 bets, own-bets tracking, approval above limit', done: true },
@@ -83,6 +84,41 @@ export default function Overview() {
   return (
     <>
       <PageHeader title="Overview" description="Your money on Stake, your strategies and the system at a glance." actions={badge} />
+      <Guide items={[
+        {
+          title: 'Stake helper',
+          body: 'The Chrome extension in your logged-in Stake tab. It reads your balance and bets and places approved bets. Offline means Chrome or the Stake tab is closed; nothing can be bet then.',
+          verdict: helper?.connected ? 'good' : 'bad', verdictLabel: helper?.connected ? 'Connected' : 'Offline',
+        },
+        {
+          title: 'Real-money execution',
+          body: 'The master switch on the Stake page. Off = nothing is ever sent to Stake, whatever the strategies say. Keep it off until a model beats the market in paper trading.',
+          verdict: st?.execution_enabled ? 'medium' : 'good', verdictLabel: st?.execution_enabled ? 'On: real bets possible' : 'Off: safe',
+        },
+        {
+          title: 'Automation',
+          body: 'Runs inside the API server every 15 minutes: settles finished bets, lets switched-on strategies pick bets, keeps the scraper going, and re-predicts upcoming matches every 6 hours.',
+          verdict: auto?.last_error ? 'bad' : auto?.last_cycle ? 'good' : 'medium',
+          verdictLabel: auto?.last_error ? 'Error' : auto?.last_cycle ? 'Running' : 'Not run yet',
+        },
+        {
+          title: 'Scraper',
+          body: 'Collects lineups, substitutions and player stats from ESPN for the player features. It runs on its own and waits when ESPN asks it to slow down.',
+          verdict: running ? 'good' : lastRun?.status === 'failed' ? 'bad' : 'medium',
+          verdictLabel: running ? 'Collecting' : lastRun?.status === 'failed' ? 'Last run failed' : 'Idle',
+        },
+        {
+          title: 'Top cards',
+          body: 'Balance and "on Stake now" come from your Stake account through the helper. "Sent today" counts real bets the system sent against the daily cap in .env (₹1 bets, ₹20 test budget). Strategies: how many are switched on, and how many use real money.',
+          verdict: 'info',
+        },
+        {
+          title: 'Data',
+          body: 'Matches and teams in the database (2015 to now, 10 leagues). Odds quotes are prices only, used to size bets, never as model inputs. Raw observations are untouched API responses stored by the collector.',
+          verdict: (summary.data?.matches ?? 0) > 40000 ? 'good' : 'medium',
+          verdictLabel: (summary.data?.matches ?? 0) > 40000 ? 'Plenty of match data' : undefined,
+        },
+      ]} />
 
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
         <Stat label="Stake balance" value={balance === undefined ? '—' : rs(balance)}
