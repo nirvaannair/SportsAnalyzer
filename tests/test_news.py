@@ -66,3 +66,45 @@ def test_switched_off_groups_are_blanked() -> None:
     assert off[list(FEATURE_GROUPS["news"])].isna().all().all()
     on = apply_feature_groups(feats, {"news": True})
     assert np.allclose(on[list(FEATURE_GROUPS["news"])].to_numpy(), 1.0)
+
+
+def test_rss_items_become_articles() -> None:
+    from backend.scraping.spiders.rss_news import parse_feed
+
+    items = [{"title": "Spurs held by Wolves", "description": "A draw.", "link": "https://x/1", "guid": "g1",
+              "pubDate": "Wed, 26 Nov 2026 08:57:49 GMT"},
+             {"title": "No date", "description": "", "link": "", "guid": "", "pubDate": ""}]
+    [article] = parse_feed(items, "bbc")
+    assert article["source"] == "bbc" and article["published"].startswith("2026-11-26T08:57:49")
+    assert article["id"].startswith("bbc:") and article["teams"] == []
+
+
+def test_team_names_in_headlines(settings_override) -> None:
+    from backend.scraping.news_loader import _alias, teams_in_text
+
+    settings_override({"news": {"team_names": {"ambiguous": ["united", "city", "inter", "reading"]}}})
+    aliases = {a: i for n, i in {"Manchester City FC": 1, "Manchester United": 2, "Arsenal": 3, "Inter": 4,
+                                  "Reading": 5}.items() if (a := _alias(n))}
+    assert "inter" not in aliases and "reading" not in aliases and aliases["manchester city"] == 1
+    found = dict(teams_in_text("Arsenal beat Manchester City as Manchester United watch", aliases))
+    assert set(found) == {1, 2, 3}
+    assert teams_in_text("United and City fans protest while reading the news", aliases) == []
+
+
+def test_team_stat_features_use_only_earlier_matches(settings_override) -> None:
+    from backend.models.features import _team_stat_features
+
+    settings_override({"features": {"team_stats": ["possessionPct", "af_expected_goals"], "team_stats_window": 2}})
+    matches = synthetic_league(1).head(30)
+    stats = pd.DataFrame([{"match_id": m.match_id, "team_id": t, "possessionPct": 40.0 + i,
+                           "af_expected_goals": 1.0 + (t == m.home_id)}
+                          for i, m in enumerate(matches.itertuples()) for t in (m.home_id, m.away_id)])
+    feats = _team_stat_features(matches, stats).set_index("match_id")
+    first = matches.iloc[0]
+    assert np.isnan(feats.loc[first["match_id"], "home_ts_possessionPct_for"])  # no earlier match
+    changed = stats.copy()
+    target = matches.iloc[20]["match_id"]
+    changed.loc[changed["match_id"] == target, "possessionPct"] = 99.0
+    after = _team_stat_features(matches, changed).set_index("match_id")
+    upto = matches[matches["date"] <= matches.iloc[20]["date"]]["match_id"]
+    pd.testing.assert_frame_equal(feats.loc[upto], after.loc[upto])

@@ -33,12 +33,18 @@ SIDE_FEATURES: tuple[str, ...] = (
     *PLAYER_FEATURES,
     # from news articles in the 7 days before kickoff; NaN where no news collected yet
     "news_n7", "news_sentiment7", "news_injury7",
+    # recent team match stats (possession, passing, xG...), names from settings
+    *(f"ts_{name}_{side}" for name in cfg("features.team_stats") for side in ("for", "against")),
 )
 NEWS_FEATURES: tuple[str, ...] = ("news_n7", "news_sentiment7", "news_injury7")
+# Team match stats: recent average for the team and conceded to opponents (names from settings).
+TEAM_STAT_FEATURES: tuple[str, ...] = tuple(
+    f"ts_{name}_{side}" for name in cfg("features.team_stats") for side in ("for", "against"))
 # Groups the Training page can switch on/off per run (switched off = blanked, as if never seen).
 FEATURE_GROUPS: dict[str, tuple[str, ...]] = {
     "players": tuple(f"{side}_{f}" for side in ("home", "away") for f in PLAYER_FEATURES),
     "news": tuple(f"{side}_{f}" for side in ("home", "away") for f in NEWS_FEATURES),
+    "team_stats": tuple(f"{side}_{f}" for side in ("home", "away") for f in TEAM_STAT_FEATURES),
 }
 
 
@@ -49,6 +55,34 @@ def apply_feature_groups(feats: pd.DataFrame, enabled: dict[str, bool]) -> pd.Da
         if not enabled.get(group, False):
             feats[list(columns)] = np.nan
     return feats
+
+
+def _team_stat_features(matches: pd.DataFrame, team_stats: pd.DataFrame) -> pd.DataFrame:
+    """Average of each stat over the team's previous N matches with stats (for = the team's own value,
+    against = what its opponents recorded against it). Strictly earlier matches only."""
+    columns = ["match_id", *(f"{side}_{f}" for side in ("home", "away") for f in TEAM_STAT_FEATURES)]
+    names = list(cfg("features.team_stats"))
+    if team_stats is None or team_stats.empty:
+        return pd.DataFrame(columns=columns)
+    window = cfg("features.team_stats_window")
+    sides = pd.concat([
+        matches[["match_id", "date", "home_id", "away_id"]].rename(columns={"home_id": "team", "away_id": "opp"}),
+        matches[["match_id", "date", "away_id", "home_id"]].rename(columns={"away_id": "team", "home_id": "opp"}),
+    ], ignore_index=True)
+    own = team_stats.rename(columns={"team_id": "team"})
+    opp = team_stats.rename(columns={"team_id": "opp", **{n: f"{n}__opp" for n in names}})
+    long = sides.merge(own, on=["match_id", "team"], how="left").merge(opp, on=["match_id", "opp"], how="left")
+    long = long.sort_values(["team", "date", "match_id"], kind="mergesort")
+    grouped = long.groupby("team", sort=False)
+    feats = long[["match_id", "team"]].copy()
+    for name in names:
+        for col, side in ((name, "for"), (f"{name}__opp", "against")):
+            feats[f"ts_{name}_{side}"] = grouped[col].transform(lambda s: s.shift(1).rolling(window, min_periods=1).mean())
+    out = matches[["match_id", "home_id", "away_id"]]
+    for side in ("home", "away"):
+        part = feats.rename(columns={"team": f"{side}_id", **{f: f"{side}_{f}" for f in TEAM_STAT_FEATURES}})
+        out = out.merge(part, on=["match_id", f"{side}_id"], how="left")
+    return out.drop(columns=["home_id", "away_id"]).reindex(columns=columns)
 
 
 def _news_features(matches: pd.DataFrame, news: pd.DataFrame, days: int | None = None) -> pd.DataFrame:
@@ -204,7 +238,8 @@ def _head_to_head(matches: pd.DataFrame) -> pd.DataFrame:
 
 
 def build_features(matches: pd.DataFrame, lineups: pd.DataFrame | None = None,
-                   goal_events: pd.DataFrame | None = None, news: pd.DataFrame | None = None) -> pd.DataFrame:
+                   goal_events: pd.DataFrame | None = None, news: pd.DataFrame | None = None,
+                   team_stats: pd.DataFrame | None = None) -> pd.DataFrame:
     """match_id + FEATURE_COLUMNS + targets (targets NaN for unplayed matches).
 
     `lineups`/`goal_events` come from backend.models.data.load_lineups; without them the player
@@ -249,12 +284,15 @@ def build_features(matches: pd.DataFrame, lineups: pd.DataFrame | None = None,
         out = out.merge(players, on="match_id", how="left")
     if news is not None and not news.empty:
         out = out.merge(_news_features(matches, news), on="match_id", how="left")
-    for side in ("home", "away"):
-        for f in (*PLAYER_FEATURES, *NEWS_FEATURES):
-            if f"{side}_{f}" not in out:
-                out[f"{side}_{f}"] = np.nan
-        cols = [f"{side}_{f}" for f in (*PLAYER_FEATURES, *NEWS_FEATURES)]
-        out[cols] = out[cols].astype(float)
+    if team_stats is not None and not team_stats.empty:
+        out = out.merge(_team_stat_features(matches, team_stats), on="match_id", how="left")
+    optional = [f"{side}_{f}" for side in ("home", "away")
+                for f in (*PLAYER_FEATURES, *NEWS_FEATURES, *TEAM_STAT_FEATURES)]
+    missing = [c for c in optional if c not in out]
+    if missing:  # add all absent groups at once (one concat, not many inserts)
+        out = pd.concat([out, pd.DataFrame(np.nan, index=out.index, columns=missing)], axis=1)
+    out[optional] = out[optional].astype(float)
+    out = out.copy()
     for side in ("home", "away"):
         out[f"{side}_finishing_l10"] = out[f"{side}_gf_l10"] / out[f"{side}_stf_l10"].where(out[f"{side}_stf_l10"] > 0)
     out["elo_diff"] = out["home_elo"] - out["away_elo"]

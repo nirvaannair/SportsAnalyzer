@@ -132,3 +132,23 @@ async def load_news_mentions(session: AsyncSession) -> pd.DataFrame:
     if not frame.empty:
         frame["published_at"] = pd.to_datetime(frame["published_at"], utc=True).dt.tz_localize(None)
     return frame
+
+
+async def load_team_stats(session: AsyncSession) -> pd.DataFrame:
+    """Per-team match stats listed in settings (features.team_stats): ESPN's and API-Football's (af_*)."""
+    from backend.core.settings import cfg
+    from backend.database.models import TeamMatchStats
+
+    wanted = list(cfg("features.team_stats"))
+    for name in wanted:
+        if _ODDS_PATTERN.search(name):
+            raise OddsLeakError(f"Team stat {name!r} looks odds-derived")
+    rows = (await session.execute(select(TeamMatchStats.match_id, TeamMatchStats.team_id, TeamMatchStats.stats))).all()
+    records = []
+    for match_id, team_id, stats in rows:
+        record = {"match_id": match_id, "team_id": team_id}
+        for name in wanted:
+            value = (stats or {}).get(name)
+            record[name] = float(value) if isinstance(value, int | float) else None
+        records.append(record)
+    return pd.DataFrame.from_records(records, columns=["match_id", "team_id", *wanted])

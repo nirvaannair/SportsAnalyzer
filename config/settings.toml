@@ -206,6 +206,49 @@ feature_days = 7                # news features look at this many days before ki
 headline_weight = 2             # headline words count this many times
 mood_positive_above = 0.15      # Team news page: mood labels
 mood_negative_below = -0.15
+spiders = ["espn_news", "rss_news"]   # news spiders the automation runs every `every_minutes`
+
+# RSS feeds (football sections). Each site's robots.txt allows reading these.
+# Teams are found by name in the headline and summary (see aliases below).
+[[news.rss]]
+name = "bbc"
+label = "BBC Sport"
+url = "https://feeds.bbci.co.uk/sport/football/rss.xml"
+
+[[news.rss]]
+name = "guardian"
+label = "The Guardian"
+url = "https://www.theguardian.com/football/rss"
+
+[[news.rss]]
+name = "skysports"
+label = "Sky Sports"
+url = "https://www.skysports.com/rss/12040"
+
+[news.team_names]
+min_alias_length = 4            # shorter names (e.g. "PSV") are too easy to mis-match
+strip_words = ["fc", "afc", "cf", "sc", "ac", "the"]   # dropped from the start/end of a club name
+# Words that are part of many club names, so on their own they don't identify a team
+ambiguous = ["united", "city", "real", "athletic", "sporting", "inter", "rovers", "town", "county", "albion",
+  "wanderers", "athletico", "olympique", "racing", "club", "fc", "afc", "cf", "sc", "ac", "as", "us", "the",
+  "reading"]                    # "reading" is also an ordinary word
+
+# Nicknames used in headlines -> one of the team's known names (ours or a provider's)
+[news.team_names.nicknames]
+spurs = "Tottenham"
+palace = "Crystal Palace"
+wolves = "Wolves"
+"man utd" = "Man United"
+villa = "Aston Villa"
+"forest" = "Nott'm Forest"
+gunners = "Arsenal"
+toffees = "Everton"
+barca = "Barcelona"
+atleti = "Ath Madrid"
+psg = "Paris SG"
+juve = "Juventus"
+bayern = "Bayern Munich"
+"bvb" = "Dortmund"
 
 [news.words]
 positive = ["win", "wins", "won", "victory", "victories", "beat", "beats", "thrash", "thrashed", "rout", "routed",
@@ -245,6 +288,12 @@ label = "API-Football"
 base_url = "https://v3.football.api-sports.io"
 plan = "Free: 100 requests/day, 10/minute, seasons 2022–2024"
 seasons = [2024, 2023, 2022]    # seasons the free plan serves (newest first)
+# Per-match requests queued for every finished fixture, in priority order (lower runs first).
+# fixtures/statistics carries expected goals (xG); fixtures/players carries player stats.
+followups = [
+  { kind = "fixture_statistics", endpoint = "fixtures/statistics", label = "Team stats + xG", priority_offset = 0 },
+  { kind = "fixture_players", endpoint = "fixtures/players", label = "Player stats", priority_offset = 10 },
+]
 min_interval_seconds = 7.0
 plan_daily_limit = 100
 default_daily_budget = 90
@@ -295,7 +344,21 @@ validation_share = 0.15         # latest share of training matches held out for 
 min_train_rows = 500            # a season fold needs at least this many earlier matches
 min_league_rows = 1000          # leagues with fewer training matches use only the global model
 league_switch_min_rows = 200    # "auto" only switches a league to its own model after this many scored matches
-default_feature_groups = { players = false, news = false }
+# Extra input groups you can switch on per training run (Training page). Off = blanked, as if never seen.
+[training.feature_groups.players]
+default = false
+label = "Player features"
+about = "Starting-XI strength and missing regulars, from lineups (only leagues with lineups so far)."
+
+[training.feature_groups.news]
+default = false
+label = "News features"
+about = "News mood, volume and injury stories in the days before each match (needs weeks of news history)."
+
+[training.feature_groups.team_stats]
+default = false
+label = "Team match stats"
+about = "Recent possession, passing, tackles, interceptions and expected goals (xG) for and against."
 
 [training.xgb]
 rounds = 2000
@@ -337,6 +400,10 @@ rating_start_goals = 1.3
 rating_start_shots_on_target = 4.2
 rating_home_advantage_start = 0.2
 head_to_head_meetings = 6
+team_stats_window = 5           # matches averaged for the team-stats features
+# Per-team match stats used as features (ESPN names, and af_* from API-Football; af_expected_goals = xG)
+team_stats = ["possessionPct", "passPct", "accuratePasses", "effectiveTackles", "interceptions",
+  "totalCrosses", "blockedShots", "af_expected_goals"]
 
 [elo]
 k = 20.0

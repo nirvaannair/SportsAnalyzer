@@ -46,6 +46,10 @@ def _set(run_id: int, **values: Any) -> None:
         connection.execute(update(TrainingRun).where(TrainingRun.id == run_id).values(**values))
 
 
+def default_feature_groups() -> dict[str, bool]:
+    return {name: bool(g["default"]) for name, g in cfg("training.feature_groups").items()}
+
+
 def default_first_test_season() -> int:
     """The first season with match data, plus training.first_test_seasons_after_start warm-up seasons."""
     from sqlalchemy import func
@@ -68,7 +72,7 @@ def create_run(models: list[str], first_test_season: int | None = None,
     if unknown or not models:
         raise ValueError(f"Choose models from {', '.join(ML_MODELS)}")
     first_test_season = first_test_season or default_first_test_season()
-    groups = feature_groups if feature_groups is not None else dict(cfg("training.default_feature_groups"))
+    groups = feature_groups if feature_groups is not None else default_feature_groups()
     with engine().begin() as connection:
         return connection.execute(
             TrainingRun.__table__.insert().values(
@@ -167,7 +171,7 @@ async def _train(run_id: int, models: list[str], first_test_season: int, as_of: 
                  feature_groups: dict[str, bool]) -> dict[str, Any]:
     from backend.database.engine import AsyncSessionFactory
     from backend.evaluation.metrics import evaluate, load_prices
-    from backend.models.data import load_lineups, load_matches, load_news_mentions
+    from backend.models.data import load_lineups, load_matches, load_news_mentions, load_team_stats
     from backend.models.features import FEATURE_COLUMNS, apply_feature_groups, build_features
     from backend.models.ml import (
         MODEL_CLASSES,
@@ -189,13 +193,15 @@ async def _train(run_id: int, models: list[str], first_test_season: int, as_of: 
         matches = await load_matches(session)
         lineups, goal_events = await load_lineups(session)
         news = await load_news_mentions(session)
-    feats = apply_feature_groups(build_features(matches, lineups, goal_events, news), feature_groups)
+        team_stats = await load_team_stats(session)
+    feats = apply_feature_groups(build_features(matches, lineups, goal_events, news, team_stats), feature_groups)
     finished = matches[matches["status"] == "finished"][["match_id", "home_goals", "away_goals", "season", "league"]]
     upcoming = upcoming_rows(feats, pd.Timestamp(as_of))
     results["data"] = {"matches": int(len(matches)), "training_rows": int(len(training_rows(feats))),
                        "features": len(FEATURE_COLUMNS), "upcoming": int(len(upcoming)),
                        "matches_with_lineups": int(lineups["match_id"].nunique()) if not lineups.empty else 0,
-                       "news_mentions": int(len(news)), "feature_groups": feature_groups}
+                       "news_mentions": int(len(news)), "team_stat_rows": int(len(team_stats)),
+                       "feature_groups": feature_groups}
 
     async def store(name: str, kind: str, preds: pd.DataFrame, params: dict[str, Any]) -> dict[str, Any]:
         async with AsyncSessionFactory() as session:
@@ -284,7 +290,8 @@ async def _run_async(run_id: int, models: list[str], first: int, groups: dict[st
 async def ml_live_predictions(matches: pd.DataFrame, as_of: date,
                               lineups: pd.DataFrame | None = None,
                               goal_events: pd.DataFrame | None = None,
-                              news: pd.DataFrame | None = None) -> dict[str, pd.DataFrame]:
+                              news: pd.DataFrame | None = None,
+                              team_stats: pd.DataFrame | None = None) -> dict[str, pd.DataFrame]:
     """Predict upcoming matches with every saved ML model (used by the automation loop)."""
     from backend.models.features import apply_feature_groups, build_features
     from backend.models.ml import (
@@ -300,7 +307,7 @@ async def ml_live_predictions(matches: pd.DataFrame, as_of: date,
     saved = [name for name in MODEL_CLASSES if (MODEL_DIR / name / "meta.json").exists()]
     if not saved:
         return {}
-    feats = await asyncio.to_thread(build_features, matches, lineups, goal_events, news)
+    feats = await asyncio.to_thread(build_features, matches, lineups, goal_events, news, team_stats)
     upcoming = upcoming_rows(feats, pd.Timestamp(as_of))
     out: dict[str, pd.DataFrame] = {}
     autos = []
@@ -330,7 +337,7 @@ def main() -> None:
     args = parser.parse_args()
     run_id = args.run_id or create_run([m.strip() for m in args.models.split(",") if m.strip()],
                                        args.first_test_season,
-                                       {**cfg("training.default_feature_groups"),
+                                       {**default_feature_groups(),
                                         **{k: v for k, v in (("players", args.players), ("news", args.news)) if v is not None}})
     print(f"Training run #{run_id}", flush=True)
     execute(run_id)

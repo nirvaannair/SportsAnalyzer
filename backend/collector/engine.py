@@ -32,7 +32,13 @@ from backend.collector.providers import PROVIDERS, Provider, check_endpoint
 from backend.core.config import ENV_FILE
 from backend.core.settings import cfg
 from backend.database.engine import AsyncSessionFactory
-from backend.database.models import AppSetting, CollectorTask, ProviderUsage, RawProviderObservation
+from backend.database.models import (
+    AppSetting,
+    CollectorTask,
+    ProviderEntityMapping,
+    ProviderUsage,
+    RawProviderObservation,
+)
 
 log = logging.getLogger("collector")
 SETTING_KEY = "collector"
@@ -141,10 +147,12 @@ async def expand_followups(session: AsyncSession) -> int:
             if fixture_id in seen:
                 continue
             seen.add(fixture_id)
-            rows.append({"provider": "api_football", "kind": "fixture_players", "endpoint": "fixtures/players",
-                         "params": {"fixture": int(fixture_id)},
-                         "label": f"Player stats, fixture {fixture_id} ({season}/{(season + 1) % 100:02d})",
-                         "priority": followup_priority + max(0, newest_season - season), "status": "pending"})
+            for follow in cfg("collector.providers.api_football.followups"):
+                rows.append({"provider": "api_football", "kind": follow["kind"], "endpoint": follow["endpoint"],
+                             "params": {"fixture": int(fixture_id)},
+                             "label": f"{follow['label']}, fixture {fixture_id} ({season}/{(season + 1) % 100:02d})",
+                             "priority": followup_priority + follow["priority_offset"] + max(0, newest_season - season),
+                             "status": "pending"})
     added = 0
     for start in range(0, len(rows), 2000):
         result = await session.execute(insert(CollectorTask).values(rows[start:start + 2000])
@@ -218,9 +226,56 @@ async def _store_raw(session: AsyncSession, provider: Provider, task: CollectorT
     ))
 
 
+def parse_fixture_statistics(payload: Any) -> dict[str, dict[str, float]]:
+    """API-Football /fixtures/statistics -> {provider team id: {stat name: number}} (incl. expected_goals)."""
+    out: dict[str, dict[str, float]] = {}
+    for block in (payload or {}).get("response") or []:
+        team_id = str((block.get("team") or {}).get("id") or "")
+        stats = {}
+        for stat in block.get("statistics") or []:
+            value = stat.get("value")
+            if isinstance(value, str) and value.endswith("%"):
+                value = value[:-1]
+            try:
+                stats[str(stat.get("type", "")).strip().lower().replace(" ", "_")] = float(value)
+            except (TypeError, ValueError):
+                continue
+        if team_id and stats:
+            out[team_id] = stats
+    return out
+
+
+async def store_fixture_statistics(session: AsyncSession, fixture_id: int, payload: Any) -> int:
+    """Save per-team stats (incl. xG) on our match, if the fixture and teams are linked."""
+    from backend.database.models import TeamMatchStats
+
+    match_id = (await session.execute(select(ProviderEntityMapping.canonical_id).where(
+        ProviderEntityMapping.provider_name == "api_football", ProviderEntityMapping.entity_type == "match",
+        ProviderEntityMapping.provider_entity_id == str(fixture_id)))).scalar_one_or_none()
+    if match_id is None:
+        return 0
+    stored = 0
+    for provider_team, stats in parse_fixture_statistics(payload).items():
+        team_id = (await session.execute(select(ProviderEntityMapping.canonical_id).where(
+            ProviderEntityMapping.provider_name == "api_football", ProviderEntityMapping.entity_type == "team",
+            ProviderEntityMapping.provider_entity_id == provider_team))).scalar_one_or_none()
+        if team_id is None:
+            continue
+        prefixed = {f"af_{k}": v for k, v in stats.items()}  # kept apart from ESPN's own stat names
+        statement = insert(TeamMatchStats).values(match_id=match_id, team_id=team_id, stats=prefixed)
+        await session.execute(statement.on_conflict_do_update(
+            constraint="uq_team_match_stats",
+            set_={"stats": TeamMatchStats.stats.op("||")(statement.excluded.stats)}))
+        stored += 1
+    return stored
+
+
 async def _after_store(session: AsyncSession, provider: Provider, task: CollectorTask, payload: Any) -> None:
     """Parse what we can right away. API-Football fixture lists register teams/fixtures and
     queue per-fixture player stats; everything else waits in the raw store for its parser."""
+    if provider.name == "api_football" and task.kind == "fixture_statistics":
+        await store_fixture_statistics(session, int(task.params["fixture"]), payload)
+        return
     if provider.name == "api_football" and task.kind == "fixtures":
         from backend.core.leagues import LEAGUES_BY_API_FOOTBALL
         from backend.identity.team_resolver import (

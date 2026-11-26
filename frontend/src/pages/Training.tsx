@@ -133,10 +133,7 @@ function NewRun({ disabled }: { disabled: boolean }) {
         </div>
         <div className="space-y-1.5 rounded-lg border border-zinc-200 p-3 text-sm dark:border-zinc-800">
           <div className="text-xs font-medium text-zinc-500 dark:text-zinc-400">Extra inputs (test each on and off)</div>
-          {[
-            ['players', 'Player features', 'Starting-XI strength and missing regulars, from lineups (only leagues with lineups so far).'],
-            ['news', 'News features', 'News mood, volume and injury stories in the 7 days before each match (needs weeks of news history).'],
-          ].map(([key, label, about]) => (
+          {(info.data?.feature_groups ?? []).map(({ name: key, label, about }) => (
             <label key={key} className="flex cursor-pointer items-start gap-2">
               <input type="checkbox" className="mt-0.5 accent-zinc-900 dark:accent-zinc-100" checked={Boolean(chosenGroups[key])}
                      onChange={(e) => setGroups({ ...chosenGroups, [key]: e.target.checked })} />
