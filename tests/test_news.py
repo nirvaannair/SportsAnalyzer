@@ -22,11 +22,12 @@ def test_good_bad_and_injury_news() -> None:
     assert good["sentiment"] > 0.5 and not good["injury"]
     assert bad["sentiment"] < -0.5
     assert hurt["sentiment"] < 0 and hurt["injury"]
-    assert neutral["sentiment"] == 0 and neutral["signals"]["transfer"]
+    assert abs(neutral["sentiment"]) < 0.15 and neutral["signals"]["transfer"]
 
 
 def test_betting_words_do_not_score() -> None:
-    assert analyse("Best betting tips and odds for the weekend", None)["sentiment"] == 0
+    scored = analyse("Betting tips and odds for the weekend", None)
+    assert scored["signals"]["words_score"] == 0 and abs(scored["sentiment"]) < 0.15
 
 
 def test_parse_espn_articles_keeps_tags_and_no_betting_fields() -> None:

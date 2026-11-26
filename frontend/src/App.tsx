@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
 import {
-  Brain, Bug, CalendarDays, Database, GitMerge, GraduationCap, LayoutDashboard,
+  Brain, Bug, CalendarDays, FlaskConical, Database, GitMerge, GraduationCap, LayoutDashboard,
   Newspaper, Power, Receipt, Settings, Sparkles, Users, Wallet,
 } from 'lucide-react'
 import type { ComponentType } from 'react'
@@ -9,6 +9,7 @@ import { GUIDE_RAIL_ID } from './components/Guide'
 import { StatusDot } from './components/ui'
 import { api } from './lib/api'
 import DataSources from './pages/DataSources'
+import ForwardTest from './pages/ForwardTest'
 import IdentityReview from './pages/IdentityReview'
 import Ledger from './pages/Ledger'
 import Matches from './pages/Matches'
@@ -46,6 +47,7 @@ const NAV: { section: string; items: NavItem[] }[] = [
     section: 'Analysis',
     items: [
       { to: '/models', label: 'Models', icon: Brain },
+      { to: '/forward', label: 'Forward test', icon: FlaskConical },
       { to: '/training', label: 'Training', icon: GraduationCap },
       { to: '/players', label: 'Players', icon: Users },
       { to: '/news', label: 'Team news', icon: Newspaper },
@@ -152,6 +154,7 @@ export default function App() {
             <Route path="/sources" element={<DataSources />} />
             <Route path="/matches" element={<Matches />} />
             <Route path="/models" element={<Models />} />
+            <Route path="/forward" element={<ForwardTest />} />
             <Route path="/training" element={<Training />} />
             <Route path="/players" element={<Players />} />
             <Route path="/news" element={<TeamNews />} />

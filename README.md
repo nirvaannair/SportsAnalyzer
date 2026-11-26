@@ -229,6 +229,27 @@ table in plain words with a live Good / Medium / Needs-work verdict (e.g. "Behin
   we don't disguise ourselves as a browser). Sofascore, WhoScored, Transfermarkt, FBref and Flashscore block or forbid
   automated collection. StatsBomb open data is allowed but covers few of our league-seasons; it can be added later.
 
+### Forward test, self-correction, automatic data selection and retraining (2026-11-26)
+- **Mock bets on every upcoming match** (`backend/forward.py`, Forward test page). Inside the app only, never sent to
+  Stake. Every automation cycle copies each model's live prediction for each upcoming match into `forward_predictions`
+  (it keeps updating until kickoff, then it is **locked**) and records pretend 1-unit bets in `mock_bets`: the
+  *favourite* and *value* picks (p × price − 1 ≥ `forward.value_min_edge`, price = Stake's captured price, else the
+  pre-match market average; used only as the payout). After the match it is settled: log loss, right/wrong, mock profit.
+- **The models learn from their misses:** after settling, each model gets a fitted *temperature* (T > 1 = it was
+  over-confident, so probabilities are softened). Once a model has `forward.calibration_min_matches` settled matches,
+  the correction is applied to its live predictions automatically. Page shows profit, rolling scores, calibration on real
+  future matches, per-league results and each model's correction.
+- **Training uses everything, keeps what helps:** with `training.auto_select` (default on) every run first tests each
+  extra data group (players, news, team stats, injuries) with a quick XGBoost backtest on the latest seasons and keeps the
+  ones that lower log loss (`training.auto_select_min_gain`). The Training page shows what was kept and why.
+- **Injuries:** API-Football injury lists → players ruled out / doubtful per team per match (`injuries` group).
+- **Retrains itself** every `training.retrain_every_days` (7) from the automation loop.
+- **News sentiment** = weighted mix (`news.sentiment_weights`) of the football word list and **VADER** (open-source
+  general sentiment model, `vaderSentiment`). Both scores are kept on each article (`signals.words_score/vader_score`).
+- **Start at log-on (optional):** `powershell -ExecutionPolicy Bypass -File scripts\install-autostart.ps1` creates a
+  Windows log-on task that runs Start SportsAnalyzer.cmd (`-Remove` deletes it). With it, the app runs with no one
+  touching it: scraping, collectors, news, predictions, mock bets, learning and retraining all happen on their own.
+
 ### Next steps (in order)
 1. After 2–4 weeks of hourly news and once all leagues have lineups: train with player and/or news features on and
    compare with run #4 on the Models/Training pages; keep whatever lowers log loss.

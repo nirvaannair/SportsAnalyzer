@@ -204,6 +204,9 @@ every_minutes = 60              # how often the news spider runs
 articles_per_league = 100       # how many articles to ask ESPN for per league
 feature_days = 7                # news features look at this many days before kickoff
 headline_weight = 2             # headline words count this many times
+# Sentiment = weighted mix of two readers: our football word list ("words") and VADER, a general-purpose
+# open-source sentiment model ("vader"). Weights are normalised; set one to 0 to use only the other.
+sentiment_weights = { words = 0.6, vader = 0.4 }
 mood_positive_above = 0.15      # Team news page: mood labels
 mood_negative_below = -0.15
 spiders = ["espn_news", "rss_news"]   # news spiders the automation runs every `every_minutes`
@@ -344,6 +347,12 @@ validation_share = 0.15         # latest share of training matches held out for 
 min_train_rows = 500            # a season fold needs at least this many earlier matches
 min_league_rows = 1000          # leagues with fewer training matches use only the global model
 league_switch_min_rows = 200    # "auto" only switches a league to its own model after this many scored matches
+# Use every data source, but keep only what helps: before each run, each extra input group is tested
+# (quick XGBoost backtest on the latest seasons, with and without it) and kept if log loss drops.
+auto_select = true
+auto_select_seasons = 3         # seasons used for the quick test
+auto_select_min_gain = 0.0003   # log-loss improvement a group must bring to be kept
+retrain_every_days = 7          # the app retrains itself this often (0 = never automatically)
 # Extra input groups you can switch on per training run (Training page). Off = blanked, as if never seen.
 [training.feature_groups.players]
 default = false
@@ -354,6 +363,11 @@ about = "Starting-XI strength and missing regulars, from lineups (only leagues w
 default = false
 label = "News features"
 about = "News mood, volume and injury stories in the days before each match (needs weeks of news history)."
+
+[training.feature_groups.injuries]
+default = false
+label = "Injuries"
+about = "How many players each team has ruled out or doubtful for the match (API-Football injury lists)."
 
 [training.feature_groups.team_stats]
 default = false
@@ -401,6 +415,8 @@ rating_start_shots_on_target = 4.2
 rating_home_advantage_start = 0.2
 head_to_head_meetings = 6
 team_stats_window = 5           # matches averaged for the team-stats features
+# API-Football injury list types -> our two injury features
+injury_types = { missing = ["Missing Fixture"], doubtful = ["Questionable"] }
 # Per-team match stats used as features (ESPN names, and af_* from API-Football; af_expected_goals = xG)
 team_stats = ["possessionPct", "passPct", "accuratePasses", "effectiveTackles", "interceptions",
   "totalCrosses", "blockedShots", "af_expected_goals"]
@@ -545,5 +561,17 @@ services_wait_seconds = 120     # how long to wait for the API and dashboard to 
 poll_seconds = 2                # how often to check while waiting
 dashboard_retries = 1           # start the dashboard again (in a visible window) if it doesn't answer
 close_after_seconds = 6         # keep the start-up window open this long at the end
+autostart_delay_seconds = 60    # scripts/install-autostart.ps1: wait this long after log-on
 api_port = 8000
 dashboard_port = 5173
+
+# ---------------------------------------------------------------------------------------------
+# Forward test: mock bets on every upcoming match (inside the app only, never sent to Stake)
+# ---------------------------------------------------------------------------------------------
+[forward]
+models = []                     # empty = every model that makes live predictions
+mock_stake = 1.0                # pretend units per mock bet
+value_min_edge = 0.05           # a "value" mock bet needs p × price − 1 at least this
+calibration_min_matches = 200   # settled matches before a model's learned correction is used
+temperature_bounds = [0.6, 1.8] # how far the correction may soften (>1) or sharpen (<1) a model
+rolling_window = 100            # matches in the rolling accuracy line on the Forward test page

@@ -212,6 +212,22 @@ export type NewsArticleRow = {
 }
 export type NewsTeamMood = { team_id: number; team: string; league: string | null; weight: number; sentiment: number | null; injury_stories: number; articles: number }
 
+export type ForwardRule = { bets: number; open: number; won: number; priced: number; profit: number; roi: number | null; cumulative: { t: string; profit: number }[] }
+export type ForwardModel = {
+  model: string; predictions: number; open: number; settled: number; logloss: number | null; accuracy: number | null
+  by_league: { league: string; n: number; logloss: number; accuracy: number }[]
+  rules: Record<string, ForwardRule>
+  rolling: { t: string; logloss: number; accuracy: number }[]
+  calibration: { bucket: string; predicted: number; observed: number; count: number }[]
+  correction: { temperature: number; n: number; logloss_before: number; logloss_after: number; active: boolean } | null
+}
+export type ForwardPredictionRow = {
+  id: number; model: string; league: string; kickoff_at: string; home: string; away: string
+  p_home: number; p_draw: number; p_away: number; locked: boolean; score: string | null; outcome: string | null
+  correct: boolean | null; logloss: number | null
+  bets: { rule: string; market: string; selection: string; price: number | null; status: string; profit: number | null }[]
+}
+
 export type TrainingScore = { n: number; logloss_1x2: number; accuracy_1x2: number; ou25_logloss?: number | null; btts_logloss?: number | null }
 export type TrainingLeague = { choice: 'global' | 'league'; global: number | null; league: number | null; n: number }
 export type TrainingRun = {
@@ -233,6 +249,7 @@ export type TrainingRun = {
   results: {
     data?: { matches: number; training_rows: number; features: number; upcoming: number }
     ml_ensemble?: { variants: Record<string, TrainingScore> }
+    feature_selection?: { baseline: number; first_season: number; groups: Record<string, { logloss: number; gain: number; kept: boolean }> }
   } & Record<string, {
     variants?: Record<string, TrainingScore>
     leagues?: Record<string, TrainingLeague>
@@ -246,6 +263,7 @@ export type TrainingInfo = {
   default_first_test_season: number | null
   default_feature_groups: Record<string, boolean>
   feature_groups: { name: string; label: string; about: string }[]
+  auto_select: boolean
   libraries: { xgboost: boolean; torch: boolean }
   models: { name: string; label: string; description: string; saved: boolean }[]
 }
@@ -317,11 +335,14 @@ export const api = {
     patch<{ effective: Record<string, unknown>; defaults: Record<string, unknown>; overrides: Record<string, unknown>; restart_sections: string[] }>('/api/settings', { values }),
   resetSettings: (section: string) =>
     post<{ effective: Record<string, unknown>; defaults: Record<string, unknown>; overrides: Record<string, unknown>; restart_sections: string[] }>(`/api/settings/reset?section=${encodeURIComponent(section)}`),
+  forwardSummary: () => request<{ models: ForwardModel[]; calibration_min_matches: number; first_prediction: string | null }>('/api/forward/summary'),
+  forwardPredictions: (model: string, status: 'open' | 'settled') =>
+    request<ForwardPredictionRow[]>(`/api/forward/predictions?model=${encodeURIComponent(model)}&status=${status}`),
   trainingInfo: () => request<TrainingInfo>('/api/training/info'),
   trainingRuns: () => request<TrainingRun[]>('/api/training/runs'),
   trainingRun: (id: number) => request<TrainingRun>(`/api/training/runs/${id}`),
   trainingLog: (id: number) => request<{ lines: string[] }>(`/api/training/runs/${id}/log`),
-  startTraining: (body: { models: string[]; first_test_season: number | null; feature_groups: Record<string, boolean> }) => post<{ id: number }>('/api/training/runs', body),
+  startTraining: (body: { models: string[]; first_test_season: number | null; feature_groups: Record<string, boolean>; auto_select: boolean }) => post<{ id: number }>('/api/training/runs', body),
   stopTraining: (id: number) => post(`/api/training/runs/${id}/stop`),
   stakeStatus: () => request<StakeStatus>('/api/stake/status'),
   stakeSettings: (body: { execution_enabled?: boolean; learn_mode?: boolean }) => post('/api/stake/settings', body),

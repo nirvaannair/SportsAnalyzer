@@ -2,6 +2,8 @@
 
 Every 15 minutes: settle finished bets, apply drawdown stops, let enabled strategies place bets.
 Every 6 hours (and at start-up): refresh upcoming fixtures and re-predict them.
+Every cycle: retrain the ML models if the last run is older than training.retrain_every_days.
+Every cycle: forward test (mock bets on upcoming matches, settle finished ones, re-learn calibration).
 Every 15 minutes: keep the ESPN scraper going (backend/scraping/auto.py), if its switch is on.
 
 Nothing here can send a real bet by itself: real orders only go out through the Stake
@@ -53,6 +55,40 @@ async def strategy_cycle() -> dict[str, Any]:
     return report
 
 
+async def retrain_cycle() -> dict[str, Any]:
+    """Start a training run (all models, auto-selected data) when the last one is older than
+    training.retrain_every_days. Runs in its own process; one at a time."""
+    from sqlalchemy import select
+
+    from backend import training
+    from backend.database.models import TrainingRun
+
+    days = cfg("training.retrain_every_days")
+    if not days:
+        return {"retrain": "off"}
+    async with AsyncSessionFactory() as session:
+        runs = (await session.execute(select(TrainingRun).order_by(TrainingRun.id.desc()).limit(20))).scalars().all()
+    if any(r.status in training.ACTIVE for r in runs):
+        return {"retrain": "a run is in progress"}
+    last = next((r for r in runs if r.status == "finished"), None)
+    if last and datetime.now(UTC) - (last.finished_at or last.created_at) < timedelta(days=days):
+        return {"retrain": f"next after {((last.finished_at or last.created_at) + timedelta(days=days)).date()}"}
+    from backend.models.ml import ML_MODELS
+
+    run_id = await asyncio.to_thread(training.create_run, list(ML_MODELS))
+    await asyncio.to_thread(training.launch, run_id)
+    return {"retrain": f"started training run #{run_id}"}
+
+
+async def forward_cycle() -> dict[str, Any]:
+    from backend.forward import cycle
+
+    async with AsyncSessionFactory() as session:
+        report = await cycle(session)
+        await session.commit()
+    return report
+
+
 async def scraper_cycle() -> dict[str, Any]:
     from backend.scraping.auto import cycle
 
@@ -73,6 +109,16 @@ async def loop() -> None:
                 state["last_refresh"] = {"at": now.isoformat(), **(await refresh_fixtures_and_predictions())}
                 last_refresh = now
             state["last_cycle"] = {"at": datetime.now(UTC).isoformat(), **(await strategy_cycle())}
+            try:
+                state["last_cycle"].update(await retrain_cycle())
+            except Exception as exc:
+                log.exception("retrain check failed")
+                state["last_cycle"]["retrain"] = f"error: {type(exc).__name__}: {exc}"
+            try:
+                state["last_cycle"]["forward"] = await forward_cycle()
+            except Exception as exc:
+                log.exception("forward test cycle failed")
+                state["last_cycle"]["forward"] = f"error: {type(exc).__name__}: {exc}"
             try:
                 state["last_cycle"].update(await scraper_cycle())
             except Exception as exc:  # the scraper must never stop betting automation
