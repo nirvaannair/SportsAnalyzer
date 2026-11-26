@@ -76,7 +76,9 @@ async def info() -> dict[str, Any]:
         first = None
     return {"gpu": gpu, "libraries": {"xgboost": has_xgb, "torch": has_torch},
             "default_first_test_season": first,
-            "default_feature_groups": cfg("training.default_feature_groups"),
+            "default_feature_groups": training.default_feature_groups(),
+            "feature_groups": [{"name": n, "label": g["label"], "about": g["about"]}
+                               for n, g in cfg("training.feature_groups").items()],
             "models": [{"name": n, **i, "saved": saved[n]} for n, i in MODEL_INFO.items()]}
 
 

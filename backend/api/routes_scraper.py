@@ -26,7 +26,12 @@ SPIDER_INFO = {
     "espn_news": {
         "label": "ESPN football news",
         "description": "Latest news per league (headline, summary, team and player tags), scored for good/bad "
-                       "news and injuries. Runs every hour automatically.",
+                       "news and injuries. Runs automatically (Settings: news.every_minutes).",
+    },
+    "rss_news": {
+        "label": "News feeds (RSS)",
+        "description": "Football news from the RSS feeds in Settings (news.rss), linked to teams by name and "
+                       "scored like the ESPN news.",
     },
 }
 

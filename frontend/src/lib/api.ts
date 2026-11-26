@@ -245,6 +245,7 @@ export type TrainingInfo = {
   gpu: string | null
   default_first_test_season: number | null
   default_feature_groups: Record<string, boolean>
+  feature_groups: { name: string; label: string; about: string }[]
   libraries: { xgboost: boolean; torch: boolean }
   models: { name: string; label: string; description: string; saved: boolean }[]
 }

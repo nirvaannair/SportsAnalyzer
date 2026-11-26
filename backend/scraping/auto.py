@@ -100,9 +100,11 @@ async def cycle(session: AsyncSession, today: date | None = None) -> dict[str, A
             run.message = run.message or "The scraper process ended unexpectedly (see log)."
     report: dict[str, Any] = {}
     # News is quick (10 requests) and runs alongside the match scraper, once an hour.
-    news = [r for r in runs if r.spider == "espn_news"]
-    if not any(r.status in ACTIVE for r in news) and             (not news or datetime.now(UTC) - news[0].created_at >= timedelta(minutes=cfg("news.every_minutes"))):
-        report["news"] = f"news run #{await _launch('espn_news', {'leagues': ''})}"
+    for spider in cfg("news.spiders"):
+        news = [r for r in runs if r.spider == spider]
+        due = not news or datetime.now(UTC) - news[0].created_at >= timedelta(minutes=cfg("news.every_minutes"))
+        if due and not any(r.status in ACTIVE for r in news):
+            report[spider] = f"run #{await _launch(spider, {})}"
 
     active = [r for r in runs if r.status in ACTIVE and r.spider == "espn_matches"]
     if active:

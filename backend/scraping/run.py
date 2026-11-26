@@ -24,7 +24,8 @@ from backend.scraping.db import engine
 from backend.scraping.settings import SCRAPE_DATA_DIR, SETTINGS
 
 SPIDERS = {"espn_matches": "backend.scraping.spiders.espn_matches.EspnMatchesSpider",
-           "espn_news": "backend.scraping.spiders.espn_news.EspnNewsSpider"}
+           "espn_news": "backend.scraping.spiders.espn_news.EspnNewsSpider",
+           "rss_news": "backend.scraping.spiders.rss_news.RssNewsSpider"}
 LOG_DIR = SCRAPE_DATA_DIR / "logs"
 
 
@@ -104,7 +105,7 @@ async def _load(spider: str) -> dict[str, Any]:
 
     try:
         async with AsyncSessionFactory() as session:
-            loaders = {"espn_matches": load_espn, "espn_news": load_news}
+            loaders = {"espn_matches": load_espn, "espn_news": load_news, "rss_news": load_news}
             result = await loaders[spider](session) if spider in loaders else {}
             await session.commit()
         return result

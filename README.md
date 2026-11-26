@@ -209,6 +209,26 @@ features, OpenLigaDB goal minutes, football-data.org CL matches) are part of the
 `frontend/src/components/Guide.tsx`: on screens 1536 px and wider a side column, otherwise a fold-out box, explaining each
 table in plain words with a live Good / Medium / Needs-work verdict (e.g. "Behind market", "Improved", "Still filling").
 
+### More sources: news feeds, xG, team match stats (2026-11-26)
+- **RSS news** (`backend/scraping/spiders/rss_news.py`, spider `rss_news`): BBC Sport, The Guardian and Sky Sports football
+  feeds, listed in settings (`[[news.rss]]`; add or remove feeds there). Robots.txt allows them. Runs with the ESPN news
+  (`news.spiders`). RSS has no team tags, so teams are found **by name** in the headline/summary using every name we know
+  (ours + provider labels) plus **nicknames** from settings (`news.team_names.nicknames`: Spurs, Palace, Barca...);
+  ambiguous words ("united", "city", "reading"...) are skipped (`news.team_names.ambiguous`). First run: 155 articles,
+  169 team links.
+- **xG via API-Football**: each finished fixture now queues `fixtures/statistics` (team stats incl. expected goals) before
+  `fixtures/players` (`collector.providers.api_football.followups`). Results are saved to `team_match_stats` as `af_*`
+  (e.g. `af_expected_goals`). Needs the API-Football collector switched on (free plan: ~90 requests/day).
+- **Team-stats feature group** (`team_stats`, Training page switch): recent average of possession, pass accuracy,
+  accurate passes, tackles, interceptions, crosses, blocked shots and xG, for and against (list in
+  `features.team_stats`). Sources: ESPN match stats (scraper) and API-Football xG.
+  **A/B test 2026-11-26** (XGBoost global, walk-forward 2020/21 to now, 24,311 matches): without team stats 1.0214,
+  with 1.0220 (England, which has the stats: 1.0259 vs 1.0276). No gain yet, so it stays **off by default**; re-test once
+  API-Football xG has been collected (switch the collector on).
+- **Not used, on purpose:** Understat returns an error page to non-browser clients (that is blocking automated access;
+  we don't disguise ourselves as a browser). Sofascore, WhoScored, Transfermarkt, FBref and Flashscore block or forbid
+  automated collection. StatsBomb open data is allowed but covers few of our league-seasons; it can be added later.
+
 ### Next steps (in order)
 1. After 2–4 weeks of hourly news and once all leagues have lineups: train with player and/or news features on and
    compare with run #4 on the Models/Training pages; keep whatever lowers log loss.
