@@ -335,6 +335,70 @@ class Prediction(Base):
     )
 
 
+class CollectorTask(Base):
+    """One request the background collector will make (or made) to a free API provider."""
+
+    __tablename__ = "collector_tasks"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    provider: Mapped[str] = mapped_column(String(40), nullable=False)
+    kind: Mapped[str] = mapped_column(String(40), nullable=False)  # e.g. injuries, fixtures, fixture_players
+    endpoint: Mapped[str] = mapped_column(String(300), nullable=False)
+    params: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default="{}")
+    label: Mapped[str] = mapped_column(String(200), nullable=False)
+    priority: Mapped[int] = mapped_column(Integer, nullable=False)  # lower runs first
+    status: Mapped[str] = mapped_column(String(16), nullable=False)  # pending done failed unavailable
+    attempts: Mapped[int] = mapped_column(SmallInteger, nullable=False, server_default="0")
+    items: Mapped[int | None] = mapped_column(Integer)
+    error: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    done_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    __table_args__ = (
+        UniqueConstraint("provider", "endpoint", "params", name="uq_collector_tasks_request"),
+        Index("ix_collector_tasks_queue", "provider", "status", "priority", "id"),
+    )
+
+
+class ProviderUsage(Base):
+    """Requests made to each provider per (UTC) day, so free-plan quotas are never exceeded."""
+
+    __tablename__ = "provider_usage"
+
+    provider: Mapped[str] = mapped_column(String(40), primary_key=True)
+    day: Mapped[date] = mapped_column(Date, primary_key=True)
+    requests: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    errors: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    remaining_reported: Mapped[int | None] = mapped_column(Integer)  # what the provider says is left today
+
+
+class TrainingRun(Base):
+    """One training job for the ML models (XGBoost / neural net), started from the dashboard or CLI.
+
+    `progress` holds the live state (model, season fold, step, the current loss curve);
+    `results` holds per-model fold summaries and final metrics once each model is done.
+    """
+
+    __tablename__ = "training_runs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    models: Mapped[list[str]] = mapped_column(JSONB, nullable=False)
+    args: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default="{}")
+    status: Mapped[str] = mapped_column(String(16), nullable=False)  # queued running finished failed stopped
+    device: Mapped[str | None] = mapped_column(String(80))
+    pid: Mapped[int | None] = mapped_column(Integer)
+    progress: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default="{}")
+    results: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default="{}")
+    message: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
 # ---------------------------------------------------------------------------
 # Scraper (Scrapy) runs and what they collected
 # ---------------------------------------------------------------------------

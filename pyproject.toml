@@ -28,6 +28,12 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Trained ML models. For the GPU build of PyTorch install it from PyTorch's index, e.g.
+#   pip install torch --index-url https://download.pytorch.org/whl/cu132
+ml = [
+    "xgboost>=3.0",
+    "torch>=2.9",
+]
 dev = [
     "pytest>=8.3",
     "pytest-asyncio>=0.25",

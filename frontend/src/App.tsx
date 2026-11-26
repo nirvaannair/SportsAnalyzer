@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
 import {
-  Brain, Bug, CalendarDays, Database, GitMerge, LayoutDashboard,
+  Brain, Bug, CalendarDays, Database, GitMerge, GraduationCap, LayoutDashboard,
   Newspaper, Power, Receipt, Settings, Sparkles, Wallet,
 } from 'lucide-react'
 import type { ComponentType } from 'react'
@@ -14,6 +14,7 @@ import Matches from './pages/Matches'
 import Models from './pages/Models'
 import Scraper from './pages/Scraper'
 import Stake from './pages/Stake'
+import Training from './pages/Training'
 import Overview from './pages/Overview'
 import Placeholder from './pages/Placeholder'
 
@@ -40,6 +41,7 @@ const NAV: { section: string; items: NavItem[] }[] = [
     section: 'Analysis',
     items: [
       { to: '/models', label: 'Models', icon: Brain },
+      { to: '/training', label: 'Training', icon: GraduationCap },
       { to: '/news', label: 'Team news', icon: Newspaper, phase: 2, blurb: 'Injury and suspension feed linked to players, with estimated match impact.' },
     ],
   },
@@ -144,6 +146,7 @@ export default function App() {
             <Route path="/sources" element={<DataSources />} />
             <Route path="/matches" element={<Matches />} />
             <Route path="/models" element={<Models />} />
+            <Route path="/training" element={<Training />} />
             <Route path="/scraper" element={<Scraper />} />
             <Route path="/stake" element={<Stake />} />
             <Route path="/ledger" element={<Ledger />} />

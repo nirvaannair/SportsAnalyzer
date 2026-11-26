@@ -17,10 +17,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy import func, select, text
 
+from backend.api.routes_collector import router as collector_router
 from backend.api.routes_data import router as data_router
 from backend.api.routes_scraper import router as scraper_router
 from backend.api.routes_stake import router as stake_router
 from backend.api.routes_strategies import router as strategies_router
+from backend.api.routes_training import router as training_router
 from backend.core.config import ENV_FILE
 from backend.database.engine import AsyncSessionFactory, dispose_database_engine
 from backend.database.models import RawProviderObservation
@@ -42,10 +44,13 @@ PROVIDERS: list[dict[str, str]] = [
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     from backend.automation import loop
+    from backend.collector.engine import loop as collector_loop
 
     task = asyncio.create_task(loop())  # fixtures, predictions, strategies (see backend/automation.py)
+    collector = asyncio.create_task(collector_loop())  # free-plan API collector (off until switched on)
     yield
     task.cancel()
+    collector.cancel()
     await dispose_database_engine()
 
 
@@ -61,6 +66,8 @@ app.include_router(data_router)
 app.include_router(scraper_router)
 app.include_router(stake_router)
 app.include_router(strategies_router)
+app.include_router(training_router)
+app.include_router(collector_router)
 
 
 @app.middleware("http")

@@ -4,11 +4,23 @@ import { useState } from 'react'
 import { Badge, Card, CardHeader, EmptyState, PageHeader } from '../components/ui'
 import { api, type ModelSummary } from '../lib/api'
 
-const LABEL: Record<string, string> = { elo: 'Elo', dixon_coles: 'Dixon-Coles', blend: 'Blend (Elo + Dixon-Coles)' }
+const LABEL: Record<string, string> = {
+  elo: 'Elo', dixon_coles: 'Dixon-Coles', blend: 'Blend (Elo + Dixon-Coles)',
+  xgb: 'XGBoost · global', xgb_league: 'XGBoost · per league', xgb_auto: 'XGBoost · auto',
+  nn: 'Neural net · global', nn_league: 'Neural net · per league', nn_auto: 'Neural net · auto',
+  ml_ensemble: 'ML ensemble',
+}
 const ABOUT: Record<string, string> = {
   elo: 'One rating per team, updated after every match. Predicts home/draw/away from the rating gap.',
   dixon_coles: 'Attack and defence strength per team, recent matches weighted more. Gives every scoreline, so also Over/Under 2.5 and BTTS.',
   blend: 'Average of the Elo and Dixon-Coles home/draw/away probabilities; goal markets from Dixon-Coles.',
+  xgb: 'Gradient-boosted trees on form, ratings, shots, rest and head-to-head features; one model for all leagues.',
+  xgb_league: 'The global XGBoost model with extra trees fine-tuned on each league.',
+  xgb_auto: 'Per league, whichever of global / per-league XGBoost did better in earlier seasons.',
+  nn: 'Residual neural net with a head per market, trained on all leagues.',
+  nn_league: 'The global neural net fine-tuned on each league.',
+  nn_auto: 'Per league, whichever of global / per-league neural net did better in earlier seasons.',
+  ml_ensemble: 'Average of XGBoost auto and neural net auto.',
 }
 
 const pct = (v: number) => `${(v * 100).toFixed(1)}%`
@@ -126,7 +138,7 @@ export default function Models() {
             </thead>
             <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
               {list.map((m) => (
-                <Row key={m.model} label={LABEL[m.model]} sub={m.default ? 'Shown on the Matches page' : undefined}
+                <Row key={m.model} label={LABEL[m.model] ?? m.model} sub={m.default ? 'Shown on the Matches page' : undefined}
                      s={m.metrics['1x2']} ou={m.metrics.ou25_logloss} btts={m.metrics.btts_logloss} n={m.metrics.n} />
               ))}
               {ref && (
@@ -156,7 +168,7 @@ export default function Models() {
                     : 'text-zinc-600 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-800'
                 }`}
               >
-                {LABEL[m.model]}
+                {LABEL[m.model] ?? m.model}
               </button>
             ))}
             <span className="ml-2 text-sm text-zinc-500 dark:text-zinc-400">{ABOUT[current.model]}</span>
