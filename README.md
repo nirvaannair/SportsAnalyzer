@@ -101,8 +101,8 @@ then in this folder: `copy .env.example .env` (fill in keys), `python -m venv .v
 | Automation loop in the API: every 15 min settle + strategy bets; every 6 h fixtures + predictions | ✅ | `backend/automation.py` |
 | Betting upgrades: confidence band per strategy, multi strategies (2–6 legs), approval threshold, In-play card (estimated total payout), Your Stake bets with cash-out | ✅ built; **needs three Learn-mode captures** (learned and verified: 4 own bets, ₹254.98 potential payout shown) | `backend/strategies/core.py`, `backend/execution/orders.py`, `routes_stake.py`, extension v0.1.2 |
 | **Trained ML models**: XGBoost (CUDA) + residual neural net (PyTorch CUDA), each global + per-league fine-tuned + "auto" (best per league) + ensemble; Training page with live loss curves | ✅ (see "ML models" below) | `backend/models/features.py`, `backend/models/ml.py`, `backend/training.py`, Training page |
-| **Free-plan API collector**: on/off switch per provider, daily budgets, quota meters, persistent queue | ✅ running: API-Football (injuries, then xG + player stats per match, 90 requests/day), OpenLigaDB, TheSportsDB; football-data.org needs a key | `backend/collector/`, Data sources page |
-| Cross-league strength (European cups / domestic cups data) | ⏳ partly: ratings carry across divisions; Champions League matches come from football-data.org once a key is added | |
+| **Free-plan API collector**: on/off switch per provider, daily budgets, quota meters, persistent queue | ✅ running: API-Football (injuries, then xG + player stats per match, 90 requests/day), OpenLigaDB, TheSportsDB, football-data.org (key added 2026-11-26) | `backend/collector/`, Data sources page |
+| Cross-league strength (European cups / domestic cups data) | ⏳ partly: ratings carry across divisions; Champions League matches now collected from football-data.org | |
 | Player pages + player impact model (with/without), player vs opponent style | ⏳ after the backfill finishes | |
 | 3D team style maps | ⏳ | |
 | Injury/news spiders | ⏳ | |
@@ -155,7 +155,7 @@ Every response is stored untouched in `raw_provider_observations` first. Odds en
 | Provider | Free plan | Collects | Status |
 |---|---|---|---|
 | API-Football | 100/day, 10/min, seasons 2022–2024 | injuries per league-season, fixture lists, then **player stats per fixture** (3,788 queued for 2024/25 so far) | **on since 2026-11-26** (budget 90/day): injuries first, then xG (`fixtures/statistics`) and player stats per match |
-| football-data.org | 10/min, 12 competitions incl. Champions League | squads, matches (cross-league via the CL) | **needs a free key**: register at football-data.org, put it in `.env` as `FOOTBALL_DATA_API_KEY`, restart the API |
+| football-data.org | 10/min, 12 competitions incl. Champions League | squads, matches (cross-league via the CL) | **on since 2026-11-26** (key in `.env` as `FOOTBALL_DATA_API_KEY`; budget 450/day, 10/min). Euros 2026/27 returns 404 (no tournament), marked unavailable |
 | OpenLigaDB | free, no key | Bundesliga + 2. Bundesliga 2015 to now with goal minutes | on |
 | TheSportsDB | test key, ~30/min | team metadata | on |
 
@@ -246,13 +246,19 @@ table in plain words with a live Good / Medium / Needs-work verdict (e.g. "Behin
 - **Retrains itself** every `training.retrain_every_days` (7) from the automation loop.
 - **News sentiment** = weighted mix (`news.sentiment_weights`) of the football word list and **VADER** (open-source
   general sentiment model, `vaderSentiment`). Both scores are kept on each article (`signals.words_score/vader_score`).
-- **Start at log-on (optional):** `powershell -ExecutionPolicy Bypass -File scripts\install-autostart.ps1` creates a
+- **Start at log-on (installed 2026-11-26, task "SportsAnalyzer", 60 s delay):** `powershell -ExecutionPolicy Bypass -File scripts\install-autostart.ps1` creates a
   Windows log-on task that runs Start SportsAnalyzer.cmd (`-Remove` deletes it). With it, the app runs with no one
   touching it: scraping, collectors, news, predictions, mock bets, learning and retraining all happen on their own.
 
+- **Training run #5 (2026-11-26, first with auto data selection, 44,091 matches, 39,860 training rows, 132 features).**
+  Selection test on 2024/25 onwards (baseline log loss 1.01772): **news kept** (−0.00048), players dropped (+0.00022),
+  injuries dropped (+0.00021, only 2022–24 coverage), team stats dropped (+0.0031). Backtest from 2018/19:
+  XGB global 1.0222 / league 1.0229 / auto 1.0224; NN global 1.0239 / league 1.0228 / auto 1.0232;
+  **ML ensemble 1.0208** (run #4: 1.0218; market 1.0062), accuracy 48.6%. Run #5's models are now live.
+
 ### Next steps (in order)
-1. After 2–4 weeks of hourly news and once all leagues have lineups: train with player and/or news features on and
-   compare with run #4 on the Models/Training pages; keep whatever lowers log loss.
+1. Nothing to do by hand: the weekly retrain re-tests players, injuries and team stats as their data grows (lineups
+   now 9,983 matches). Watch the Forward test page: calibration kicks in after 200 settled matches per model.
 2. First real cash-out through the dashboard (owner's click) and first strategy multi in approve mode, to confirm end to end.
 2. Compare the ML models with Elo/Dixon-Coles and the market on the Models page; tune them (hyper-parameter search,
    calibration layer) and paper-trade the best one.
